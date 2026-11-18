@@ -4,22 +4,27 @@ import { FashionColor } from '../constants/fashionColors';
 
 interface Props {
   color: FashionColor;
+  rawHex?: string;
 }
 
-export const CameraReticle: React.FC<Props> = ({ color }) => {
+export const CameraReticle: React.FC<Props> = ({ color, rawHex }) => {
+  const reticleColor = rawHex || color.hex;
   return (
     <View style={styles.container} pointerEvents="none">
-      {/* Floating badge above the reticle */}
-      <View style={styles.badgeWrapper}>
-        <View style={styles.badge}>
-          <View style={[styles.badgeIndicator, { backgroundColor: color.hex }]} />
-          <Text style={styles.badgeText}>{color.name}</Text>
+      {/* Reticle circle: tô màu viền bằng rawHex để đối chiếu trực tiếp với vật thể */}
+      <View style={[styles.outerReticle, { borderColor: reticleColor }]}>
+        {/* Floating badge positioned absolutely above the outer reticle (không đẩy lệch tâm vòng ngắm) */}
+        <View style={styles.badgeWrapper}>
+          <View style={styles.badge}>
+            <View style={[styles.badgeIndicator, { backgroundColor: color.hex }]} />
+            <Text style={styles.badgeText}>{color.name}</Text>
+          </View>
         </View>
-      </View>
 
-      {/* Reticle circle */}
-      <View style={[styles.outerReticle, { borderColor: color.hex }]}>
-        <View style={styles.innerDot} />
+        {/* Ô vuông ngắm nhỏ cố định ở chính giữa (12x12 dp với chấm tâm mảnh) */}
+        <View style={styles.targetSquare}>
+          <View style={styles.innerDot} />
+        </View>
       </View>
     </View>
   );
@@ -27,16 +32,34 @@ export const CameraReticle: React.FC<Props> = ({ color }) => {
 
 const styles = StyleSheet.create({
   container: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  outerReticle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 3.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.35,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 5,
+      },
+    }),
+  },
   badgeWrapper: {
-    marginBottom: 12,
+    position: 'absolute',
+    bottom: 56,
+    alignItems: 'center',
+    minWidth: 160,
   },
   badge: {
     flexDirection: 'row',
@@ -73,32 +96,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.2,
   },
-  outerReticle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 4,
+  targetSquare: {
+    width: 12,
+    height: 12,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+    backgroundColor: 'rgba(0, 0, 0, 0.1)',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.35,
-        shadowRadius: 4,
+        shadowOpacity: 0.6,
+        shadowRadius: 2,
       },
       android: {
-        elevation: 5,
+        elevation: 3,
       },
     }),
   },
   innerDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.4)',
+    borderWidth: 0.5,
+    borderColor: 'rgba(0, 0, 0, 0.6)',
   },
 });

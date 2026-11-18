@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -6,71 +6,171 @@ import {
   Text,
   Platform,
   Alert,
-  Modal,
+  ScrollView,
+  Pressable,
+  GestureResponderEvent,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import {
+  Camera,
+  useCameraDevice,
+  useCameraPermission,
+  useCameraFormat,
+} from 'react-native-vision-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
 
 import { CameraReticle } from '../components/CameraReticle';
 import { LivePreviewCard } from '../components/LivePreviewCard';
-import { getRandomColor, getNextColor } from '../utils/mockColor';
-import { FashionColor, SAMPLE_FABRIC_IMAGES } from '../constants/fashionColors';
+import { LightingMode } from '../services/ColorEngine';
+import {
+  FashionColor,
+  FASHION_COLORS,
+  SAMPLE_FABRIC_IMAGES,
+} from '../constants/fashionColors';
+import { useCameraColorSampler } from '../hooks/useCameraColorSampler';
 import { RootStackParamList } from '../../App';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'CameraPicker'>;
 
-const LIGHT_ENVIRONMENTS = ['Tự động', 'Đèn vàng', 'Ngoài trời'] as const;
-type LightEnv = (typeof LIGHT_ENVIRONMENTS)[number];
+const LIGHT_ENVIRONMENTS = [
+  { label: 'Tự động', mode: 'auto' as LightingMode, icon: 'sunny-outline' as const },
+  { label: 'Đèn vàng', mode: 'warm_light' as LightingMode, icon: 'bulb-outline' as const },
+  { label: 'Ngoài trời', mode: 'outdoor' as LightingMode, icon: 'partly-sunny-outline' as const },
+];
 
 export const CameraPickerScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
+  const cameraRef = useRef<Camera>(null);
 
-  const [permission, requestPermission] = useCameraPermissions();
+  // 1. Quản lý quyền Camera & Thiết bị Camera
+  const { hasPermission, requestPermission } = useCameraPermission();
+  const device = useCameraDevice('back');
+
+  // Zoom 1x / 2x cho vật thể nhỏ
+  const [isZoomed, setIsZoomed] = useState(false);
+  const neutralZoom = device?.neutralZoom ?? 1;
+  const maxZoom = device?.maxZoom ?? 1;
+  const zoom = isZoomed ? Math.min(maxZoom, neutralZoom * 2) : neutralZoom;
+
+  // Điểm chạm lấy nét & đo sáng
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (focusTimeoutRef.current) {
+        clearTimeout(focusTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Định dạng camera 720p (1280x720) sắc nét, kết hợp vùng crop 6x6 ở 4fps không làm nóng máy
+  const format = useCameraFormat(device, [
+    { videoResolution: { width: 1280, height: 720 } },
+    { fps: 30 },
+  ]);
+
+  // Flashlight & Lighting environment states
   const [torchOn, setTorchOn] = useState(false);
-  const [lightEnv, setLightEnv] = useState<LightEnv>('Tự động');
-  const [currentColor, setCurrentColor] = useState<FashionColor>(getRandomColor());
-  const [isFrozen, setIsFrozen] = useState(false);
-  const [selectedShade, setSelectedShade] = useState<string | null>(null);
+  const [lightEnvIndex, setLightEnvIndex] = useState(0);
+  const currentEnv = LIGHT_ENVIRONMENTS[lightEnvIndex];
+
+  // Hook độc lập quản lý Frame Processor và Color Engine (Trimmed Mean trực tiếp trong Worklet)
+  const {
+    colorResult: currentColorResult,
+    isFrozen,
+    freeze,
+    unfreeze,
+    frameProcessor,
+    calibrateWithMode,
+    isRgbSwapped,
+    toggleRgbSwap,
+  } = useCameraColorSampler({
+    lightingMode: currentEnv.mode,
+    initialColor: FASHION_COLORS[0],
+  });
+
+  // Chạm lấy nét & đo sáng điểm tại vị trí bấm
+  const handleTouchCamera = useCallback(
+    async (event: GestureResponderEvent) => {
+      if (isFrozen) return;
+      const { locationX, locationY } = event.nativeEvent;
+
+      // Hiển thị vòng phản hồi lấy nét ngắn tại vị trí chạm
+      setFocusPoint({ x: locationX, y: locationY });
+      if (focusTimeoutRef.current) {
+        clearTimeout(focusTimeoutRef.current);
+      }
+      focusTimeoutRef.current = setTimeout(() => {
+        setFocusPoint(null);
+      }, 1200);
+
+      if (device?.supportsFocus) {
+        try {
+          await cameraRef.current?.focus({ x: locationX, y: locationY });
+        } catch {
+          // Bỏ qua nếu thiết bị đang bận hoặc không hỗ trợ
+        }
+      }
+    },
+    [device?.supportsFocus, isFrozen]
+  );
+
+  // Selected shade when fine-tuning in frozen mode
+  const [selectedColor, setSelectedColor] = useState<FashionColor>(FASHION_COLORS[0]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Interval mock color cycling when not frozen
+  // Sync selectedColor when currentColorResult updates while active
   useEffect(() => {
-    if (isFrozen) return;
-    const interval = setInterval(() => {
-      setCurrentColor(getRandomColor());
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [isFrozen]);
+    if (!isFrozen) {
+      setSelectedColor(currentColorResult.matchedColor);
+    }
+  }, [currentColorResult, isFrozen]);
 
-  const toggleTorch = () => {
-    setTorchOn(prev => !prev);
-  };
+  // Request camera permission on mount if needed
+  useEffect(() => {
+    if (!hasPermission) {
+      requestPermission();
+    }
+  }, [hasPermission, requestPermission]);
 
-  const cycleLightEnv = () => {
-    const currentIndex = LIGHT_ENVIRONMENTS.indexOf(lightEnv);
-    const nextIndex = (currentIndex + 1) % LIGHT_ENVIRONMENTS.length;
-    setLightEnv(LIGHT_ENVIRONMENTS[nextIndex]);
-  };
+  // 3. Tính năng hỗ trợ thực tế
+  // Bật/tắt đèn flash
+  const toggleTorch = useCallback(() => {
+    if (!device?.hasTorch) {
+      showToast('Thiết bị không hỗ trợ đèn Flash');
+      return;
+    }
+    setTorchOn((prev) => !prev);
+  }, [device?.hasTorch]);
 
-  const handleNextMockColor = () => {
-    setCurrentColor(prev => getNextColor(prev.id));
-  };
+  // Đổi chế độ ánh sáng (Tự động / Đèn vàng / Ngoài trời)
+  const cycleLightEnv = useCallback(() => {
+    const nextIndex = (lightEnvIndex + 1) % LIGHT_ENVIRONMENTS.length;
+    setLightEnvIndex(nextIndex);
+    const nextEnv = LIGHT_ENVIRONMENTS[nextIndex];
+    const updated = calibrateWithMode(nextEnv.mode);
+    if (updated) {
+      setSelectedColor(updated.matchedColor);
+    }
+  }, [lightEnvIndex, calibrateWithMode]);
 
-  const handleShutter = () => {
-    setIsFrozen(true);
-    setSelectedShade(currentColor.hex);
-  };
+  // Chốt màu (Freeze)
+  const handleShutter = useCallback(() => {
+    freeze();
+    setSelectedColor(currentColorResult.matchedColor);
+  }, [freeze, currentColorResult.matchedColor]);
 
-  const handleRetake = () => {
-    setIsFrozen(false);
-    setSelectedShade(null);
-  };
+  // Chụp lại (Hủy Freeze và mở lại camera)
+  const handleRetake = useCallback(() => {
+    unfreeze();
+  }, [unfreeze]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -80,7 +180,7 @@ export const CameraPickerScreen: React.FC = () => {
   };
 
   const handleWardrobe = () => {
-    showToast('Tính năng Tủ đồ sẽ mở ở giai đoạn 2');
+    showToast('Tính năng Tủ đồ sẽ mở ở giai đoạn kế tiếp');
   };
 
   const openImagePicker = async () => {
@@ -95,117 +195,209 @@ export const CameraPickerScreen: React.FC = () => {
         navigation.navigate('ImagePicker', { imageUri: result.assets[0].uri });
       }
     } catch {
-      // Fallback to sample fabric image if permission or library has issue
       navigation.navigate('ImagePicker', { imageUri: SAMPLE_FABRIC_IMAGES[0] });
     }
   };
 
   const handleConfirmMatch = () => {
-    const finalHex = selectedShade || currentColor.hex;
-    Alert.alert(
-      '🎉 Đã chốt mã màu',
-      `Màu thời trang: ${currentColor.name}\nMã HEX: ${finalHex.toUpperCase()}\n\nChuyển sang module Gợi ý Phối đồ ở bước kế tiếp!`,
-      [{ text: 'Hoàn tất', onPress: () => setIsFrozen(false) }]
-    );
+    navigation.navigate('OutfitSuggestion', {
+      baseColor: selectedColor,
+      baseRole: 'top',
+    });
   };
+
+  // Danh sách các sắc độ lân cận cho người dùng tinh chỉnh trong chế độ Freeze
+  const shadeOptions = useMemo(() => {
+    const list: FashionColor[] = [currentColorResult.matchedColor];
+    if (currentColorResult.nearbyColors && currentColorResult.nearbyColors.length > 0) {
+      currentColorResult.nearbyColors.forEach((c) => {
+        if (!list.some((existing) => existing.id === c.id)) {
+          list.push(c);
+        }
+      });
+    }
+    return list;
+  }, [currentColorResult]);
+
+  // Giao diện khi chưa được cấp quyền Camera
+  if (!hasPermission) {
+    return (
+      <View style={styles.container}>
+        <StatusBar style="light" />
+        <View style={styles.permissionBox}>
+          <View style={styles.permissionIconCircle}>
+            <Ionicons name="camera" size={40} color="#FFFFFF" />
+          </View>
+          <Text style={styles.permissionTitle}>Cần quyền truy cập Camera</Text>
+          <Text style={styles.permissionDesc}>
+            Ứng dụng cần quyền truy cập Camera để nhận diện màu sắc trang phục thực tế từ sợi vải.
+          </Text>
+          <TouchableOpacity
+            style={styles.permissionBtn}
+            onPress={requestPermission}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.permissionBtnText}>Cấp quyền Camera</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
 
-      {/* Camera Preview or Dark Fallback */}
-      {permission?.granted ? (
-        <CameraView
-          style={StyleSheet.absoluteFill}
-          facing="back"
-          enableTorch={torchOn}
-        />
-      ) : (
-        <View style={[StyleSheet.absoluteFill, styles.cameraPlaceholder]}>
-          <Ionicons name="camera-outline" size={48} color="#4B5563" />
-          <Text style={styles.permissionText}>
-            {permission ? 'Chưa cấp quyền truy cập Camera' : 'Đang kiểm tra quyền Camera...'}
-          </Text>
-          {permission && !permission.granted && (
-            <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
-              <Text style={styles.permissionBtnText}>Cấp quyền Camera</Text>
-            </TouchableOpacity>
+      {/* Vision Camera Preview (Tối ưu YUV, hạ phân giải 480p, buffer compression, zoom 1x/2x, cover đồng trục) */}
+      {device != null ? (
+        <>
+          <Camera
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            device={device}
+            format={format}
+            fps={30}
+            pixelFormat="yuv"
+            enableBufferCompression={true}
+            isActive={isFocused && !isFrozen}
+            torch={device.hasTorch && torchOn ? 'on' : 'off'}
+            frameProcessor={frameProcessor}
+            zoom={zoom}
+            resizeMode="cover"
+          />
+          {/* Lớp bắt cử chỉ chạm lấy nét & đo sáng điểm */}
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={handleTouchCamera}
+            disabled={isFrozen}
+          />
+
+          {/* Vòng phản hồi lấy nét & đo sáng điểm khi chạm */}
+          {focusPoint != null && !isFrozen && (
+            <View
+              pointerEvents="none"
+              style={[
+                styles.focusRing,
+                {
+                  left: focusPoint.x - 28,
+                  top: focusPoint.y - 28,
+                },
+              ]}
+            >
+              <View style={styles.focusCenterDot} />
+            </View>
           )}
+        </>
+      ) : (
+        <View style={[StyleSheet.absoluteFill, styles.permissionBox]}>
+          <Ionicons name="camera-reverse-outline" size={48} color="#6B7280" />
+          <Text style={styles.permissionDesc}>Không tìm thấy thiết bị Camera phù hợp.</Text>
         </View>
       )}
 
-      {/* Dark overlay when frozen */}
+      {/* Lớp nền mờ khi đóng băng (Freeze mode) */}
       {isFrozen && <View style={styles.frozenBackdrop} />}
 
       {/* Floating Header */}
       <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
         <View style={styles.header}>
-          {/* Flash Toggle */}
-          <TouchableOpacity
-            style={[styles.headerPillBtn, torchOn && styles.headerPillBtnActive]}
-            onPress={toggleTorch}
-            activeOpacity={0.8}
-            accessibilityLabel="Bật tắt đèn flash"
-          >
-            <Ionicons
-              name={torchOn ? 'flash' : 'flash-off-outline'}
-              size={18}
-              color={torchOn ? '#111827' : '#FFFFFF'}
-            />
-          </TouchableOpacity>
+          <View style={styles.headerLeftGroup}>
+            {/* Flash Toggle */}
+            <TouchableOpacity
+              style={[styles.headerPillBtn, torchOn && styles.headerPillBtnActive]}
+              onPress={toggleTorch}
+              activeOpacity={0.8}
+              accessibilityLabel="Bật tắt đèn flash soi vải"
+            >
+              <Ionicons
+                name={torchOn ? 'flash' : 'flash-off-outline'}
+                size={18}
+                color={torchOn ? '#111827' : '#FFFFFF'}
+              />
+            </TouchableOpacity>
+
+            {/* R-B Channel Swap Toggle (hỗ trợ các dòng Android sensor BGR) */}
+            <TouchableOpacity
+              style={[styles.headerPillBtn, isRgbSwapped && styles.headerPillBtnActive]}
+              onPress={() => {
+                toggleRgbSwap();
+                showToast(!isRgbSwapped ? 'Đã bật đảo kênh R-B (BGR)' : 'Đã về kênh chuẩn RGB');
+              }}
+              activeOpacity={0.8}
+              accessibilityLabel="Đảo kênh màu R-B"
+            >
+              <Ionicons
+                name="swap-horizontal"
+                size={18}
+                color={isRgbSwapped ? '#111827' : '#FFFFFF'}
+              />
+            </TouchableOpacity>
+          </View>
 
           {/* Environment Lighting Pill */}
           <TouchableOpacity
             style={styles.envPill}
             onPress={cycleLightEnv}
             activeOpacity={0.8}
+            accessibilityLabel="Thay đổi môi trường ánh sáng"
           >
-            <Ionicons name="sunny-outline" size={14} color="#FBBF24" style={styles.envIcon} />
-            <Text style={styles.envText}>{lightEnv}</Text>
+            <Ionicons
+              name={currentEnv.icon}
+              size={14}
+              color="#F59E0B"
+              style={styles.envIcon}
+            />
+            <Text style={styles.envText}>{currentEnv.label}</Text>
             <Ionicons name="chevron-down" size={12} color="#6B7280" />
           </TouchableOpacity>
 
-          {/* Test color cycle button */}
-          <TouchableOpacity
-            style={styles.headerPillBtn}
-            onPress={handleNextMockColor}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="color-wand-outline" size={18} color="#FFFFFF" />
-          </TouchableOpacity>
+          {/* Frozen Indicator / Status Pill */}
+          {isFrozen ? (
+            <TouchableOpacity
+              style={styles.retakeTopBtn}
+              onPress={handleRetake}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="refresh-outline" size={16} color="#111827" />
+              <Text style={styles.retakeTopText}>Chụp lại</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.headerRightPlaceholder} />
+          )}
         </View>
       </SafeAreaView>
 
-      {/* Center Reticle (hidden when frozen) */}
-      {!isFrozen && <CameraReticle color={currentColor} />}
-
-      {/* Floating Retake Button in Frozen Mode */}
-      {isFrozen && (
-        <View style={[styles.retakeHeader, { top: insets.top + 60 }]}>
-          <TouchableOpacity style={styles.retakeBtn} onPress={handleRetake} activeOpacity={0.8}>
-            <Ionicons name="refresh-outline" size={18} color="#111827" />
-            <Text style={styles.retakeText}>Chụp lại</Text>
-          </TouchableOpacity>
+      {/* Tâm ngắm Reticle (Đồng trục tuyệt đối với tâm cảm biến camera 100%) */}
+      {!isFrozen && (
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, styles.reticleOverlay]}
+        >
+          <CameraReticle
+            color={currentColorResult.matchedColor}
+            rawHex={currentColorResult.rawHex}
+          />
         </View>
       )}
 
-      {/* Thumb Zone - Bottom Area (1/3 of screen) */}
+      {/* Thumb Zone - Khu vực tương tác phía dưới */}
       <View style={[styles.bottomContainer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        {/* Live Preview Card */}
-        <LivePreviewCard
-          color={currentColor}
-          onPressNextColor={handleNextMockColor}
-        />
+        {/* Live Preview Card khi đang soi màu */}
+        {!isFrozen && (
+          <LivePreviewCard
+            color={currentColorResult.matchedColor}
+          />
+        )}
 
-        {/* Regular Shutter Dock OR Frozen Confirmation Card */}
+        {/* Thanh công cụ chụp hoặc Thẻ xác nhận & chọn sắc độ lân cận */}
         {!isFrozen ? (
           <View style={styles.bottomDock}>
-            {/* Gallery Button */}
+            {/* Nút Thư viện ảnh */}
             <TouchableOpacity
               style={styles.dockIconBtn}
               onPress={openImagePicker}
               activeOpacity={0.75}
-              accessibilityLabel="Mở thư viện ảnh"
+              accessibilityLabel="Mở ảnh từ thư viện"
             >
               <View style={styles.iconCircle}>
                 <Ionicons name="images-outline" size={24} color="#111827" />
@@ -213,19 +405,39 @@ export const CameraPickerScreen: React.FC = () => {
               <Text style={styles.dockLabel}>Thư viện</Text>
             </TouchableOpacity>
 
-            {/* Shutter Button (Chốt màu) */}
-            <TouchableOpacity
-              style={styles.shutterOuter}
-              onPress={handleShutter}
-              activeOpacity={0.85}
-              accessibilityLabel="Chốt mã màu"
-            >
-              <View style={[styles.shutterInner, { backgroundColor: currentColor.hex }]}>
-                <View style={styles.shutterCenterDot} />
-              </View>
-            </TouchableOpacity>
+            {/* Cột giữa: Nút chuyển nhanh Zoom 1x / 2x và Nút Chốt màu (Shutter) */}
+            <View style={styles.centerShutterCol}>
+              {/* Nút chuyển nhanh Zoom 1x / 2x cho vật thể nhỏ */}
+              <TouchableOpacity
+                style={[styles.zoomToggleBtn, isZoomed && styles.zoomToggleBtnActive]}
+                onPress={() => setIsZoomed((prev) => !prev)}
+                activeOpacity={0.8}
+                accessibilityLabel="Chuyển chế độ zoom 1x / 2x"
+              >
+                <Text style={[styles.zoomToggleText, isZoomed && styles.zoomToggleTextActive]}>
+                  {isZoomed ? '2x' : '1x'}
+                </Text>
+              </TouchableOpacity>
 
-            {/* Wardrobe Button (Tủ đồ) */}
+              {/* Nút Chốt màu (Shutter) */}
+              <TouchableOpacity
+                style={styles.shutterOuter}
+                onPress={handleShutter}
+                activeOpacity={0.85}
+                accessibilityLabel="Chốt mã màu vải"
+              >
+                <View
+                  style={[
+                    styles.shutterInner,
+                    { backgroundColor: currentColorResult.matchedColor.hex },
+                  ]}
+                >
+                  <View style={styles.shutterCenterDot} />
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {/* Nút Tủ đồ */}
             <TouchableOpacity
               style={styles.dockIconBtn}
               onPress={handleWardrobe}
@@ -239,28 +451,103 @@ export const CameraPickerScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
         ) : (
-          /* Frozen Confirmation Card */
+          /* Thẻ xác nhận & chọn sắc độ lân cận (Freeze Card) */
           <View style={styles.frozenCard}>
-            <View style={styles.frozenRow}>
-              <View style={[styles.frozenColorSwatch, { backgroundColor: selectedShade || currentColor.hex }]} />
+            {/* Tiêu đề & Swatch màu đang chọn */}
+            <View style={styles.frozenHeaderRow}>
+              <View
+                style={[
+                  styles.frozenColorSwatch,
+                  { backgroundColor: selectedColor.hex },
+                ]}
+              />
               <View style={styles.frozenTextCol}>
-                <Text style={styles.frozenColorTitle}>{currentColor.name}</Text>
-                <Text style={styles.frozenHex}>{(selectedShade || currentColor.hex).toUpperCase()}</Text>
+                <View style={styles.frozenTitleRow}>
+                  <Text style={styles.frozenColorTitle} numberOfLines={1}>
+                    {selectedColor.name}
+                  </Text>
+                  <View style={styles.deltaEBadge}>
+                    <Text style={styles.deltaEText}>
+                      ΔE {currentColorResult.deltaE.toFixed(1)}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.frozenHex}>
+                  HEX: {selectedColor.hex.toUpperCase()} • Chuẩn hóa ánh sáng ({currentEnv.label})
+                </Text>
               </View>
             </View>
 
-            <TouchableOpacity
-              style={styles.primaryActionButton}
-              onPress={handleConfirmMatch}
-              activeOpacity={0.88}
-            >
-              <Text style={styles.primaryActionText}>Phối đồ với màu này →</Text>
-            </TouchableOpacity>
+            {/* Danh sách 3 sắc độ lân cận để người dùng tinh chỉnh */}
+            <View style={styles.shadesSection}>
+              <Text style={styles.shadesLabel}>Sắc độ lân cận đối chiếu:</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.shadesRow}
+              >
+                {shadeOptions.map((shade, idx) => {
+                  const isSelected = selectedColor.id === shade.id;
+                  return (
+                    <TouchableOpacity
+                      key={shade.id}
+                      style={[
+                        styles.shadePill,
+                        isSelected && styles.shadePillSelected,
+                      ]}
+                      onPress={() => setSelectedColor(shade)}
+                      activeOpacity={0.8}
+                    >
+                      <View
+                        style={[
+                          styles.shadeDot,
+                          { backgroundColor: shade.hex },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.shadeName,
+                          isSelected && styles.shadeNameSelected,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {shade.name}
+                      </Text>
+                      {idx === 0 && (
+                        <View style={styles.matchedTag}>
+                          <Text style={styles.matchedTagText}>Chuẩn</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+
+            {/* Các nút hành động */}
+            <View style={styles.frozenActionRow}>
+              <TouchableOpacity
+                style={styles.retakeCardBtn}
+                onPress={handleRetake}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="refresh-outline" size={18} color="#374151" />
+                <Text style={styles.retakeCardBtnText}>Chụp lại</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.primaryActionButton}
+                onPress={handleConfirmMatch}
+                activeOpacity={0.88}
+              >
+                <Text style={styles.primaryActionText}>Phối đồ với màu này →</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
       </View>
 
-      {/* Lightweight Toast Notification */}
+      {/* Toast thông báo */}
       {toastMessage && (
         <View style={[styles.toastContainer, { bottom: insets.bottom + 120 }]}>
           <Text style={styles.toastText}>{toastMessage}</Text>
@@ -275,29 +562,49 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#121212',
   },
-  cameraPlaceholder: {
+  permissionBox: {
+    flex: 1,
     backgroundColor: '#121212',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
   },
-  permissionText: {
-    color: '#9CA3AF',
-    fontSize: 14,
-    marginTop: 12,
+  permissionIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  permissionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginBottom: 8,
     textAlign: 'center',
   },
+  permissionDesc: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 24,
+    maxWidth: 300,
+  },
   permissionBtn: {
-    marginTop: 16,
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
   },
   permissionBtnText: {
     color: '#111827',
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
   },
   frozenBackdrop: {
     position: 'absolute',
@@ -305,7 +612,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
   },
   headerSafeArea: {
     position: 'absolute',
@@ -321,6 +628,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
+  headerLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   headerPillBtn: {
     width: 42,
     height: 42,
@@ -334,6 +646,14 @@ const styles = StyleSheet.create({
   headerPillBtnActive: {
     backgroundColor: '#FFFFFF',
     borderColor: '#FFFFFF',
+  },
+  headerRightPlaceholder: {
+    width: 92,
+    height: 42,
+  },
+  headerPillBtnPlaceholder: {
+    width: 42,
+    height: 42,
   },
   envPill: {
     flexDirection: 'row',
@@ -354,37 +674,43 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginRight: 4,
   },
-  retakeHeader: {
-    position: 'absolute',
-    right: 16,
-    zIndex: 20,
-  },
-  retakeBtn: {
+  retakeTopBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 4,
-      },
-    }),
   },
-  retakeText: {
-    marginLeft: 6,
-    fontSize: 13,
+  retakeTopText: {
+    marginLeft: 4,
+    fontSize: 12,
     fontWeight: '600',
     color: '#111827',
+  },
+  reticleOverlay: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  focusRing: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 15,
+  },
+  focusCenterDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#F59E0B',
   },
   bottomContainer: {
     position: 'absolute',
@@ -395,7 +721,7 @@ const styles = StyleSheet.create({
   },
   bottomDock: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     justifyContent: 'space-around',
     paddingHorizontal: 24,
     paddingTop: 4,
@@ -404,6 +730,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     width: 64,
+    marginBottom: 6,
+  },
+  centerShutterCol: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomToggleBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+  },
+  zoomToggleBtnActive: {
+    backgroundColor: '#F59E0B',
+    borderColor: '#FFFFFF',
+  },
+  zoomToggleText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  zoomToggleTextActive: {
+    color: '#111827',
   },
   iconCircle: {
     width: 48,
@@ -457,42 +811,138 @@ const styles = StyleSheet.create({
       ios: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 10,
+        shadowOpacity: 0.18,
+        shadowRadius: 12,
       },
       android: {
-        elevation: 6,
+        elevation: 8,
       },
     }),
   },
-  frozenRow: {
+  frozenHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 14,
   },
   frozenColorSwatch: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    borderWidth: 1.5,
+    width: 50,
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 2,
     borderColor: '#E5E7EB',
   },
   frozenTextCol: {
     marginLeft: 12,
     flex: 1,
   },
+  frozenTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   frozenColorTitle: {
     fontSize: 17,
     fontWeight: '700',
     color: '#111827',
+    flex: 1,
+    marginRight: 8,
+  },
+  deltaEBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  deltaEText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669',
   },
   frozenHex: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '500',
     color: '#6B7280',
-    marginTop: 2,
+    marginTop: 3,
+  },
+  shadesSection: {
+    marginBottom: 16,
+  },
+  shadesLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4B5563',
+    marginBottom: 8,
+  },
+  shadesRow: {
+    flexDirection: 'row',
+    paddingVertical: 2,
+    gap: 8,
+  },
+  shadePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+  },
+  shadePillSelected: {
+    borderColor: '#111827',
+    backgroundColor: '#F3F4F6',
+  },
+  shadeDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.15)',
+    marginRight: 6,
+  },
+  shadeName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  shadeNameSelected: {
+    color: '#111827',
+    fontWeight: '700',
+  },
+  matchedTag: {
+    marginLeft: 6,
+    backgroundColor: '#E0E7FF',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  matchedTagText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#4338CA',
+  },
+  frozenActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  retakeCardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  retakeCardBtnText: {
+    color: '#374151',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
   },
   primaryActionButton: {
+    flex: 1,
     backgroundColor: '#111827',
     borderRadius: 14,
     paddingVertical: 14,

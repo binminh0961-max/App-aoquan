@@ -14,21 +14,55 @@
     "updates": {
       "fallbackToCacheTimeout": 0
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Ứng dụng cần quyền truy cập Camera để nhận diện màu sắc trang phục thực tế."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"
       },
-      "permissions": ["CAMERA"]
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA"
+      ],
+      "package": "com.nhatminh300.appaoquan"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "plugins": [
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Ứng dụng cần quyền truy cập Camera để nhận diện màu sắc trang phục thực tế.",
+          "enableMicrophonePermission": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "buildArchs": [
+              "arm64-v8a"
+            ]
+          }
+        }
+      ],
+      "./plugins/withLowMemoryGradle.js"
+    ],
     "sdkVersion": "58.0.0",
-    "runtimeVersion": "1.0.0"
+    "runtimeVersion": "1.0.0",
+    "extra": {
+      "eas": {
+        "projectId": "892b726b-1550-4a85-9f93-91d71cb8e94e"
+      }
+    }
   }
 }

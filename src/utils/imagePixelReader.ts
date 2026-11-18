@@ -3,12 +3,11 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import jpeg from 'jpeg-js';
 import { Buffer } from 'buffer';
 import {
+  analyzeRgbaPatch,
   ColorMatchResult,
   LightingMode,
-  matchFabricColor,
-  RGB,
 } from '../services/ColorEngine';
-import { FashionColor, FASHION_COLORS } from '../constants/fashionColors';
+import { FashionColor } from '../constants/fashionColors';
 
 export interface DecodedImageData {
   width: number;
@@ -118,17 +117,10 @@ export function sampleColorAtNormalizedPoint(
   const px = Math.round(clampedNormX * (width - 1));
   const py = Math.round(clampedNormY * (height - 1));
 
-  // 1. Pixel tại đúng tâm chữ thập
-  const centerIdx = (py * width + px) * 4;
-  const centerPixel: RGB = {
-    r: data[centerIdx],
-    g: data[centerIdx + 1],
-    b: data[centerIdx + 2],
-  };
-
-  // 2. Trích xuất lưới 11x11 pixel (bán kính 5 pixel xung quanh) để lọc nhiễu sợi vải
+  // Trích xuất lưới 11x11 pixel (121 pixels = 484 bytes RGBA, tâm ngắm tại bán kính 5)
   const radius = 5;
-  const pixels: RGB[] = [];
+  const patchData = new Uint8Array(121 * 4);
+  let patchOffset = 0;
 
   for (let dy = -radius; dy <= radius; dy++) {
     const curY = Math.max(0, Math.min(height - 1, py + dy));
@@ -136,16 +128,16 @@ export function sampleColorAtNormalizedPoint(
       const curX = Math.max(0, Math.min(width - 1, px + dx));
       const pixelIndex = (curY * width + curX) * 4;
 
-      const r = data[pixelIndex];
-      const g = data[pixelIndex + 1];
-      const b = data[pixelIndex + 2];
-
-      pixels.push({ r, g, b });
+      patchData[patchOffset] = data[pixelIndex];
+      patchData[patchOffset + 1] = data[pixelIndex + 1];
+      patchData[patchOffset + 2] = data[pixelIndex + 2];
+      patchData[patchOffset + 3] = data[pixelIndex + 3];
+      patchOffset += 4;
     }
   }
 
-  // Chuyển qua ColorEngine để xử lý
-  return matchFabricColor(pixels, centerPixel, FASHION_COLORS, lightingMode);
+  // Dùng chung lõi phân tích analyzeRgbaPatch của ColorEngine
+  return analyzeRgbaPatch<FashionColor>(patchData, 121, lightingMode);
 }
 
 /**

@@ -185,17 +185,10 @@ export const ImagePickerScreen: React.FC = () => {
   };
 
   const handleConfirmMatch = () => {
-    Alert.alert(
-      '👗 Sẵn sàng phối đồ',
-      `Bạn đã chọn màu:\n• Tên chuẩn: ${selectedColor.name}\n• Mã HEX: ${activeHex.toUpperCase()}\n• Mã hút thật: ${rawHex.toUpperCase()}\n• Chế độ sáng: ${
-        lightingMode === 'warm_light'
-          ? 'Đèn vàng'
-          : lightingMode === 'outdoor'
-          ? 'Ngoài trời'
-          : 'Tự động'
-      }\n\nHệ thống sẽ chuyển qua module gợi ý bảng phối màu tương phản và liền kề!`,
-      [{ text: 'Bắt đầu phối đồ', onPress: () => navigation.goBack() }]
-    );
+    navigation.navigate('OutfitSuggestion', {
+      baseColor: selectedColor,
+      baseRole: 'top',
+    });
   };
 
   const activeDisplayUri = manipulatedUri || currentImageUri;

@@ -363,3 +363,100 @@ export function matchFabricColor<T extends ColorItemWithLab>(
     nearbyColors: nearby,
   };
 }
+
+// -------------------------------------------------------------
+// 6. PHÂN TÍCH VÙNG LẤY MẪU RGBA (11x11 PATCH) DÙNG CHUNG
+// -------------------------------------------------------------
+
+/**
+ * Phân tích mảng byte RGBA (ví dụ 11x11 = 121 pixel từ camera hoặc ảnh tải lên)
+ * Quy trình:
+ * 1. Lấy mã màu thật tại tâm
+ * 2. Lọc 20% sáng nhất & 20% tối nhất bằng Trimmed Mean Sampling
+ * 3. Bù trừ môi trường ánh sáng (auto | warm_light | outdoor)
+ * 4. Chuyển sang không gian CIELAB
+ * 5. Tính CIEDE2000 so khớp tìm màu thời trang gần nhất & 3 sắc độ lân cận
+ */
+export function analyzeRgbaPatch<T extends ColorItemWithLab = any>(
+  rgbaData: Uint8Array,
+  pixelCount: number = 121,
+  lightingMode: LightingMode = 'auto',
+  colorDictionary?: T[]
+): ColorMatchResult<T> {
+  const count = pixelCount > 0 ? pixelCount : Math.floor(rgbaData.length / 4);
+  const centerIndex = Math.floor(count / 2) * 4;
+  const centerPixel: RGB = {
+    r: rgbaData[centerIndex] ?? 128,
+    g: rgbaData[centerIndex + 1] ?? 128,
+    b: rgbaData[centerIndex + 2] ?? 128,
+  };
+
+  const pixels: RGB[] = [];
+  for (let i = 0; i < count; i++) {
+    const offset = i * 4;
+    pixels.push({
+      r: rgbaData[offset],
+      g: rgbaData[offset + 1],
+      b: rgbaData[offset + 2],
+    });
+  }
+
+  const dict = (colorDictionary || require('../constants/fashionColors').FASHION_COLORS) as T[];
+  return matchFabricColor(pixels, centerPixel, dict, lightingMode);
+}
+
+// -------------------------------------------------------------
+// 7. PHÂN TÍCH TRỰC TIẾP GIÁ TRỊ RGB (TỐI ƯU CHO WORKLET CAMERA)
+// -------------------------------------------------------------
+
+/**
+ * Phân tích trực tiếp 3 kênh màu RGB (đã tính trung bình qua Trimmed Mean trực tiếp từ Worklet)
+ * Quy trình:
+ * 1. Mã màu thực tế sensor đọc được: rgbToHex(r, g, b)
+ * 2. Bù trừ môi trường ánh sáng: calibrateLighting({ r, g, b }, lightingMode)
+ * 3. Chuyển sang không gian CIELAB
+ * 4. Tính khoảng cách màu CIEDE2000 so khớp tìm màu thời trang gần nhất & 3 sắc độ lân cận
+ */
+export function analyzeRgbColor<T extends ColorItemWithLab = any>(
+  r: number,
+  g: number,
+  b: number,
+  lightingMode: LightingMode = 'auto',
+  colorDictionary?: T[]
+): ColorMatchResult<T> {
+  const clamp = (val: number) => Math.max(0, Math.min(255, Math.round(val)));
+  const exactRgb: RGB = { r: clamp(r), g: clamp(g), b: clamp(b) };
+  const rawHex = rgbToHex(exactRgb.r, exactRgb.g, exactRgb.b);
+  const trimmedHex = rawHex;
+
+  // 1. Bù trừ môi trường ánh sáng
+  const calibratedRgb = calibrateLighting(exactRgb, lightingMode);
+  const calibratedHex = rgbToHex(calibratedRgb.r, calibratedRgb.g, calibratedRgb.b);
+
+  // 2. Chuyển sang CIELAB
+  const targetLab = rgbToLab(calibratedRgb);
+
+  // 3. So khớp CIEDE2000 với từ điển màu thời trang
+  const dict = (colorDictionary || require('../constants/fashionColors').FASHION_COLORS) as T[];
+  const scored = dict.map((item) => ({
+    item,
+    dE: deltaE2000(targetLab, item.lab),
+  }));
+
+  scored.sort((a, b) => a.dE - b.dE);
+
+  const matched = scored[0];
+  const nearby = scored.slice(1, 4).map((s) => s.item);
+
+  return {
+    rawHex,
+    trimmedHex,
+    calibratedRgb,
+    calibratedHex,
+    lab: targetLab,
+    matchedColor: matched ? matched.item : dict[0],
+    deltaE: matched ? matched.dE : 0,
+    nearbyColors: nearby,
+  };
+}
+

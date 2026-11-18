@@ -9,10 +9,13 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CameraPickerScreen } from './src/screens/CameraPickerScreen';
 import { ImagePickerScreen } from './src/screens/ImagePickerScreen';
+import { OutfitSuggestionScreen } from './src/screens/OutfitSuggestionScreen';
+import { FashionColor } from './src/constants/fashionColors';
 
 export type RootStackParamList = {
   CameraPicker: undefined;
   ImagePicker: { imageUri?: string } | undefined;
+  OutfitSuggestion: { baseColor: FashionColor; baseRole?: 'top' | 'bottom' };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -32,6 +35,13 @@ export default function App() {
           >
             <Stack.Screen name="CameraPicker" component={CameraPickerScreen} />
             <Stack.Screen name="ImagePicker" component={ImagePickerScreen} />
+            <Stack.Screen
+              name="OutfitSuggestion"
+              component={OutfitSuggestionScreen}
+              options={{
+                contentStyle: { backgroundColor: '#F8F9FA' },
+              }}
+            />
           </Stack.Navigator>
         </NavigationContainer>
       </SafeAreaProvider>
