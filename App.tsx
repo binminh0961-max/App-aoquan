@@ -39,7 +39,7 @@ export default function App() {
               name="OutfitSuggestion"
               component={OutfitSuggestionScreen}
               options={{
-                contentStyle: { backgroundColor: '#F8F9FA' },
+                contentStyle: { backgroundColor: '#A8A8A5' },
               }}
             />
           </Stack.Navigator>
