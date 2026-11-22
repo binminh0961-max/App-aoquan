@@ -9,9 +9,30 @@ export type OutfitSlotKey = OutfitSlotId | 'accessory';
 // Giới hạn bộ chọn giới tính chuẩn: chỉ gồm 'male' (Nam) và 'female' (Nữ)
 export type SilhouetteStyleType = 'male' | 'female';
 
-export type TopSilhouetteId = 'tshirt' | 'shirt' | 'hoodie' | 'blazer';
-export type BottomSilhouetteId = 'wide_pants' | 'jeans' | 'shorts' | 'a_line_skirt';
-export type ShoesSilhouetteId = 'sneakers' | 'loafers' | 'boots';
+export type TopSilhouetteId =
+  | 'tshirt'
+  | 'polo'
+  | 'baby_tee'
+  | 'blouse'
+  | 'shirt'
+  | 'hoodie'
+  | 'blazer';
+export type BottomSilhouetteId =
+  | 'wide_pants'
+  | 'jeans'
+  | 'shorts'
+  | 'a_line_skirt'
+  | 'mini_skirt';
+export type ShoesSilhouetteId =
+  | 'sneaker'
+  | 'loafer'
+  | 'dress_shoes'
+  | 'boot'
+  | 'heels';
+
+export type TopSilhouette = TopSilhouetteId;
+export type BottomSilhouette = BottomSilhouetteId;
+export type ShoeSilhouette = ShoesSilhouetteId;
 
 export type SilhouetteId = TopSilhouetteId | BottomSilhouetteId | ShoesSilhouetteId;
 
@@ -49,6 +70,17 @@ export type VisualRatiosMap = {
 
 export type StyleHarmonyMode = 'all' | 'neutral' | 'analogous' | 'complementary';
 
+export type OccasionMode = 'all' | 'study' | 'work' | 'casual' | 'party';
+
+export type SkinUndertone = 'neutral' | 'warm' | 'cool';
+
+export type UndertoneFitLevel = 'flattering' | 'neutral' | 'caution';
+
+export interface OutfitFilterContext {
+  occasion: OccasionMode;
+  undertone: SkinUndertone;
+}
+
 export type FabricColorGroup = 'neutral' | 'earth' | 'cool' | 'warm' | 'accent';
 
 export type PaletteDisplayGroupId = 'neutral' | 'earth_warm' | 'cool' | 'accent';
@@ -66,6 +98,8 @@ export interface StudioOutfitState {
   slots: OutfitSlotsMap;
   styleType: SilhouetteStyleType;
   visualRatios: VisualRatiosMap;
+  occasion: OccasionMode;
+  undertone: SkinUndertone;
   harmonyTitle: string;
   harmonyDescription: string;
   harmonyType: 'neutral' | 'analogous' | 'complementary' | 'triadic' | 'custom';

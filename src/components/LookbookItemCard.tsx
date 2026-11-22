@@ -25,7 +25,9 @@ function getSlotIcon(slot: OutfitSlotId, silhouette: SilhouetteId): keyof typeof
   if (slot === 'outerwear') return 'layers-outline';
   if (slot === 'top') return 'shirt-outline';
   if (slot === 'bottom') {
-    return silhouette === 'a_line_skirt' ? 'woman-outline' : 'resize-outline';
+    return silhouette === 'a_line_skirt' || silhouette === 'mini_skirt'
+      ? 'woman-outline'
+      : 'resize-outline';
   }
   return 'footsteps-outline';
 }
@@ -40,6 +42,12 @@ function shortSilhouetteLabel(id: SilhouetteId, rawLabel: string): string {
   switch (id) {
     case 'tshirt':
       return 'Áo thun';
+    case 'polo':
+      return 'Áo Polo';
+    case 'baby_tee':
+      return 'Baby Tee';
+    case 'blouse':
+      return 'Áo kiểu';
     case 'shirt':
       return 'Sơ mi';
     case 'hoodie':
@@ -47,18 +55,24 @@ function shortSilhouetteLabel(id: SilhouetteId, rawLabel: string): string {
     case 'blazer':
       return 'Blazer';
     case 'wide_pants':
-      return 'Ống suông';
+      return 'Quần suông';
     case 'jeans':
       return 'Quần Jean';
     case 'shorts':
       return 'Quần Short';
     case 'a_line_skirt':
       return 'Váy chữ A';
-    case 'sneakers':
+    case 'mini_skirt':
+      return 'Váy ngắn';
+    case 'sneaker':
       return 'Sneaker';
-    case 'loafers':
+    case 'loafer':
       return 'Loafer';
-    case 'boots':
+    case 'dress_shoes':
+      return 'Giày da';
+    case 'heels':
+      return 'Cao gót';
+    case 'boot':
       return 'Boot';
     default:
       return rawLabel;
@@ -111,7 +125,8 @@ export const LookbookItemCard: React.FC<LookbookItemCardProps> = ({
           const hsl = hexToHsl(item.color.hex);
           const iconOnSwatchColor = hsl.l > 62 ? '#111827' : '#FFFFFF';
           const displayLabel =
-            slotId === 'bottom' && item.silhouette === 'a_line_skirt'
+            slotId === 'bottom' &&
+            (item.silhouette === 'a_line_skirt' || item.silhouette === 'mini_skirt')
               ? 'Chân váy'
               : slotId === 'top'
               ? isLayering

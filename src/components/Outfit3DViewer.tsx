@@ -1,9 +1,9 @@
 // src/components/Outfit3DViewer.tsx
 /**
  * Outfit3DViewer - Engine 3D Stylized Mannequin mượt mà trên GPU Skia (Skia.PictureRecorder + canvas.drawPath)
- * - Hierarchical Part Z-Sorting 2 tầng (9 bộ phận độc lập): triệt tiêu 100% xuyên thấu & nhảy lớp mọi góc 360°.
- * - Perspective View-Vector Culling chính xác: dot(N, V) > -0.06 với mặt trong độc lập (không hack 2 mặt).
- * - Smooth Vertex-Averaged Shading + Softbox Studio Wrap Lighting + Seam Sealing (stroke 1.15px Round).
+ * - Hierarchical Part Z-Sorting chuẩn thắt lưng & hợp nhất cụm Thân trên (`torsoLayerGroup`: `top` + `outerwear`).
+ * - Perspective View-Vector Culling chuẩn: dot(N, V) > -0.06 cho bề mặt ngoài & dot(N, V) > 0.05 cho vòng gầm gấu áo (`hemSealRing`).
+ * - Smooth Vertex-Averaged Shading + Softbox Studio Wrap Lighting + Seam Sealing (stroke 1.4px Round, alpha = 1.0).
  * - Bóng sàn 2 lớp mềm (bóng tỏa studio + 2 bóng tiếp xúc xoay theo vị trí 2 đế giày thực tế).
  * - Zero-GC 60fps: tái sử dụng 1 SkPathBuilder + 2 SkPaint + 2 ShadowPaint ngoài vòng lặp.
  */
@@ -38,6 +38,9 @@ import type {
 import {
   buildOutfitMesh3D,
   safeNormalize,
+  type DetailDot3D,
+  type DetailLine3D,
+  type DetailLineStyle,
   type MeshMaterialKind,
   type MeshPartId,
   type Quad3D,
@@ -88,16 +91,46 @@ const L2 = safeNormalize(0.65, 0.15, 0.5);
 const FIXED_MATERIAL_RGB: Record<
   Exclude<
     MeshMaterialKind,
-    OutfitSlotId | 'inner_cavity' | 'outer_cavity' | 'bottom_cavity'
+    | OutfitSlotId
+    | 'inner_cavity'
+    | 'outer_cavity'
+    | 'bottom_cavity'
+    | 'top_lining'
+    | 'outer_lining'
   >,
   RGB
 > = {
-  sole_white: { r: 243, g: 243, b: 240 }, // #F3F3F0
+  sole_white: { r: 245, g: 245, b: 243 }, // #F5F5F3
   sole_dark: { r: 34, g: 37, b: 42 }, // #22252A
-  mannequin_leg: { r: 203, g: 198, b: 191 }, // #CBC6BF
+  mannequin_leg: { r: 210, g: 204, b: 196 }, // #D2CCC4
   accent_light: { r: 238, g: 239, b: 242 },
   accent_metal: { r: 196, g: 164, b: 116 },
 };
+
+/** Tự thích nghi màu nét chi tiết 3D theo độ sáng của nền vải (nổi rõ cả trên Đen Than lẫn Trắng Tinh) */
+function resolveDetailLineColor(style: DetailLineStyle, baseLuma: number): string {
+  const isDarkFabric = baseLuma < 72; // tương đương l < ~28%
+  const isVeryLightFabric = baseLuma > 224;
+
+  switch (style) {
+    case 'seamDark':
+      return isDarkFabric ? 'rgba(255, 255, 255, 0.24)' : 'rgba(17, 24, 39, 0.30)';
+    case 'seamLight':
+      if (isDarkFabric) return 'rgba(255, 255, 255, 0.32)';
+      if (isVeryLightFabric) return 'rgba(17, 24, 39, 0.16)';
+      return 'rgba(255, 255, 255, 0.38)';
+    case 'contrastWhite':
+      return isVeryLightFabric ? '#D4D0C8' : '#F5F3EE';
+    case 'contrastDark':
+      return isDarkFabric ? 'rgba(255, 255, 255, 0.34)' : 'rgba(17, 24, 39, 0.56)';
+    case 'zipper':
+      return isDarkFabric ? '#CBD1D9' : '#4E5766';
+    case 'lace':
+      return isVeryLightFabric ? '#BFC5CE' : '#F8F8F6';
+    default:
+      return 'rgba(17, 24, 39, 0.28)';
+  }
+}
 
 function hexToRgb(hex: string): RGB {
   const clean = hex.replace('#', '').trim();
@@ -197,6 +230,8 @@ interface SkiaResources {
   pathBuilder: SkPathBuilder;
   fillPaint: SkPaint;
   strokePaint: SkPaint;
+  detailStrokePaint: SkPaint;
+  detailFillPaint: SkPaint;
   ambientShadowPaint: SkPaint;
   ambientShadowMask: SkMaskFilter;
   contactShadowPaint: SkPaint;
@@ -292,14 +327,27 @@ export default function Outfit3DViewer({
     const fillPaint = Skia.Paint();
     fillPaint.setStyle(PaintStyle.Fill);
     fillPaint.setAntiAlias(true);
+    fillPaint.setAlphaf(1.0);
 
-    // Seam Sealing: stroke 1.15px cùng mã màu fill + bo tròn góc khít tuyệt đối mọi khe pixel
+    // Seam Sealing: stroke 1.4px trùng mã màu shadedHex (độ đục 100%, alpha = 1.0) khít mọi kẽ sub-pixel
     const strokePaint = Skia.Paint();
     strokePaint.setStyle(PaintStyle.Stroke);
-    strokePaint.setStrokeWidth(1.15);
+    strokePaint.setStrokeWidth(1.4);
     strokePaint.setStrokeJoin(StrokeJoin.Round);
     strokePaint.setStrokeCap(StrokeCap.Round);
     strokePaint.setAntiAlias(true);
+    strokePaint.setAlphaf(1.0);
+
+    // Paint tái sử dụng cho 3D Projected Surface Details (đường chỉ, dây rút, cúc, khóa kéo)
+    const detailStrokePaint = Skia.Paint();
+    detailStrokePaint.setStyle(PaintStyle.Stroke);
+    detailStrokePaint.setStrokeJoin(StrokeJoin.Round);
+    detailStrokePaint.setStrokeCap(StrokeCap.Round);
+    detailStrokePaint.setAntiAlias(true);
+
+    const detailFillPaint = Skia.Paint();
+    detailFillPaint.setStyle(PaintStyle.Fill);
+    detailFillPaint.setAntiAlias(true);
 
     // Bóng sàn lớp 1: bóng tỏa mềm rộng dưới sàn studio
     const ambientShadowPaint = Skia.Paint();
@@ -321,6 +369,8 @@ export default function Outfit3DViewer({
       pathBuilder,
       fillPaint,
       strokePaint,
+      detailStrokePaint,
+      detailFillPaint,
       ambientShadowPaint,
       ambientShadowMask,
       contactShadowPaint,
@@ -339,6 +389,8 @@ export default function Outfit3DViewer({
         res.pathBuilder.dispose();
         res.fillPaint.dispose();
         res.strokePaint.dispose();
+        res.detailStrokePaint.dispose();
+        res.detailFillPaint.dispose();
         res.ambientShadowPaint.dispose();
         res.ambientShadowMask.dispose();
         res.contactShadowPaint.dispose();
@@ -362,7 +414,38 @@ export default function Outfit3DViewer({
     [gender, isLayering, outerShape, topShape, bottomShape, shoesShape]
   );
 
-  // Bảng màu gốc RGB cho từng loại vật liệu (lớp mặt trong tối hơn vải 42%)
+  // Gom sẵn DetailLine3D & DetailDot3D theo từng partId (Zero-GC trong vòng lặp render 60fps)
+  const detailsByPart = useMemo(() => {
+    const makeRecord = <T,>(): Record<MeshPartId, T[]> => ({
+      mannequinCore: [],
+      bottomCore: [],
+      neckCavity: [],
+      torsoCore: [],
+      outerwearShell: [],
+      hoodBack: [],
+      leftArm: [],
+      rightArm: [],
+      leftLeg: [],
+      rightLeg: [],
+      leftShoe: [],
+      rightShoe: [],
+    });
+    const lines = makeRecord<DetailLine3D>();
+    const dots = makeRecord<DetailDot3D>();
+    for (let i = 0; i < mesh.detailLines.length; i++) {
+      const l = mesh.detailLines[i];
+      lines[l.partId].push(l);
+    }
+    for (let i = 0; i < mesh.detailDots.length; i++) {
+      const d = mesh.detailDots[i];
+      dots[d.partId].push(d);
+    }
+    return { lines, dots };
+  }, [mesh]);
+
+  // Bảng màu gốc RGB cho từng loại vật liệu:
+  // - Nắp đóng / khoang lòng sâu (`*_cavity`): tối hơn vải chính 50% (45-55%) tạo chiều sâu bóng tự nhiên
+  // - Lớp lót mặt trong (`*_lining`): tối hơn vải ngoài 35%
   const materialRgbMap = useMemo<Record<MeshMaterialKind, RGB>>(() => {
     const topRgb = hexToRgb(topHex);
     const outerRgb = hexToRgb(outerHex);
@@ -373,19 +456,29 @@ export default function Outfit3DViewer({
       bottom: bottomRgb,
       shoes: hexToRgb(shoesHex),
       inner_cavity: {
-        r: topRgb.r * 0.58,
-        g: topRgb.g * 0.58,
-        b: topRgb.b * 0.58,
+        r: topRgb.r * 0.5,
+        g: topRgb.g * 0.5,
+        b: topRgb.b * 0.5,
       },
       outer_cavity: {
-        r: outerRgb.r * 0.58,
-        g: outerRgb.g * 0.58,
-        b: outerRgb.b * 0.58,
+        r: outerRgb.r * 0.5,
+        g: outerRgb.g * 0.5,
+        b: outerRgb.b * 0.5,
       },
       bottom_cavity: {
-        r: bottomRgb.r * 0.58,
-        g: bottomRgb.g * 0.58,
-        b: bottomRgb.b * 0.58,
+        r: bottomRgb.r * 0.5,
+        g: bottomRgb.g * 0.5,
+        b: bottomRgb.b * 0.5,
+      },
+      top_lining: {
+        r: topRgb.r * 0.65,
+        g: topRgb.g * 0.65,
+        b: topRgb.b * 0.65,
+      },
+      outer_lining: {
+        r: outerRgb.r * 0.65,
+        g: outerRgb.g * 0.65,
+        b: outerRgb.b * 0.65,
       },
       ...FIXED_MATERIAL_RGB,
     };
@@ -432,7 +525,7 @@ export default function Outfit3DViewer({
           a.targetPitch = null;
         }
       } else if (!a.dragging && Math.abs(a.velPitch) > 0.0007) {
-        a.pitch = Math.max(-0.35, Math.min(0.32, a.pitch + a.velPitch));
+        a.pitch = Math.max(-0.32, Math.min(0.3, a.pitch + a.velPitch));
         a.velPitch *= 0.9;
         keep = true;
       } else {
@@ -554,8 +647,8 @@ export default function Outfit3DViewer({
 
         animRef.current.yaw += dYaw;
         animRef.current.pitch = Math.max(
-          -0.35,
-          Math.min(0.32, animRef.current.pitch + dPitch)
+          -0.32,
+          Math.min(0.3, animRef.current.pitch + dPitch)
         );
         // Lọc mượt vận tốc quán tính (EMA) để thả tay không bị giật
         animRef.current.velYaw = animRef.current.velYaw * 0.45 + dYaw * 0.55;
@@ -741,6 +834,9 @@ export default function Outfit3DViewer({
 
     // Phân nhóm mặt hiển thị theo từng bộ phận bằng Perspective View-Vector Culling
     const partBuckets: Record<MeshPartId, ProjectedQuadEntry[]> = {
+      mannequinCore: [],
+      bottomCore: [],
+      neckCavity: [],
       torsoCore: [],
       outerwearShell: [],
       hoodBack: [],
@@ -751,8 +847,7 @@ export default function Outfit3DViewer({
       leftShoe: [],
       rightShoe: [],
     };
-    // Tách riêng lòng sâu mặt trong `torsoCore` (lòng cổ & mặt trong gấu váy, layerPriority = 0)
-    // để mặt trong váy luôn vẽ trước 2 bắp chân mannequin khi nghiêng góc nhìn lên!
+    // Lòng sâu mặt trong & trần tối màu của chân váy (vẽ trước 2 bắp chân mannequin)
     const torsoCavityBucket: ProjectedQuadEntry[] = [];
 
     let totalVisible = 0;
@@ -767,14 +862,16 @@ export default function Outfit3DViewer({
       const rcz = q.cy * sinX + cz1 * cosX;
       const [vx, vy, vz] = safeNormalize(-cx1, -rcy, cameraZ - rcz);
 
-      // Xoay pháp tuyến hình học thực tế để Culling chính xác theo tia nhìn phối cảnh
+      // Xoay pháp tuyến hình học thực tế để Culling chuẩn theo tia nhìn phối cảnh
       const nx1 = q.nx * cosY + q.nz * sinY;
       const nz1 = -q.nx * sinY + q.nz * cosY;
       const rny = q.ny * cosX - nz1 * sinX;
       const rnz = q.ny * sinX + nz1 * cosX;
 
       const viewDot = nx1 * vx + rny * vy + rnz * vz;
-      if (viewDot <= -0.06) continue;
+      // - Bề mặt ngoài: dot(N, V) > -0.06 (chuẩn, không giữ lại mặt lưng đảo chiều gần mép)
+      // - Vòng gầm gấu áo (`hemSealRing`): CHỈ hiện khi dot(N, V) > 0.05 (góc nhìn hất từ dưới lên)
+      if (q.isHemSeal ? viewDot <= 0.05 : viewDot <= -0.06) continue;
 
       // Xoay pháp tuyến mượt (Smooth Vertex-Averaged Normal) để tính ánh sáng trơn mịn
       const snx1 = q.snx * cosY + q.snz * sinY;
@@ -810,6 +907,7 @@ export default function Outfit3DViewer({
       });
       for (let i = 0; i < quads.length; i++) {
         const q = quads[i];
+        if (q.isHemSeal) continue;
         const snx1 = q.snx * cosY + q.snz * sinY;
         const snz1 = -q.snx * sinY + q.snz * cosY;
         const sny2 = q.sny * cosX - snz1 * sinX;
@@ -854,55 +952,68 @@ export default function Outfit3DViewer({
 
     const hoodBehindTorso = zHood < zTorso;
     // Khi xoay nghiêng/ngang (> ~14°), tay gần camera ở phía trước thân áo -> vẽ cuối cùng đè sạch lên thân!
-    // Khi nhìn trực diện trước/sau, 2 tay nằm ngang vai cạnh thân -> vẽ trước ngực/ve áo để không che ve áo.
     const nearArmZ = nearArm === 'leftArm' ? zLeftArm : zRightArm;
     const nearArmInFront = nearArmZ > zTorso + 0.08;
 
-    const orderedBuckets: ProjectedQuadEntry[][] = [];
+    const orderedBuckets: {
+      partId: MeshPartId | null;
+      entries: ProjectedQuadEntry[];
+      detailParts?: MeshPartId[];
+    }[] = [];
 
-    // 1. Lòng mặt trong sâu của thân/váy (mặt trong gấu váy luôn nằm sau bắp chân mannequin)
-    orderedBuckets.push(torsoCavityBucket);
+    // STRICT WAIST RENDER ORDER:
+    // 1. `mannequinWaistCore` (trụ eo/cổ ma-nơ-canh cho `baby_tee` / `blouse`)
+    orderedBuckets.push({ partId: 'mannequinCore', entries: partBuckets.mannequinCore });
 
-    // 2. Chân & giày xa -> chân & giày gần (tôn trọng thứ tự ống quần phủ giày hay cổ giày ôm chân)
+    // 2. `bottom`: lòng trong váy -> chân & giày xa/gần -> khối `pelvis` cắm sâu lên trong áo
+    orderedBuckets.push({ partId: null, entries: torsoCavityBucket });
     if (pantsCoverShoes) {
-      orderedBuckets.push(partBuckets[farShoe]);
-      orderedBuckets.push(partBuckets[farLeg]);
-      orderedBuckets.push(partBuckets[nearShoe]);
-      orderedBuckets.push(partBuckets[nearLeg]);
+      orderedBuckets.push({ partId: farShoe, entries: partBuckets[farShoe] });
+      orderedBuckets.push({ partId: farLeg, entries: partBuckets[farLeg] });
+      orderedBuckets.push({ partId: nearShoe, entries: partBuckets[nearShoe] });
+      orderedBuckets.push({ partId: nearLeg, entries: partBuckets[nearLeg] });
     } else {
-      orderedBuckets.push(partBuckets[farLeg]);
-      orderedBuckets.push(partBuckets[farShoe]);
-      orderedBuckets.push(partBuckets[nearLeg]);
-      orderedBuckets.push(partBuckets[nearShoe]);
+      orderedBuckets.push({ partId: farLeg, entries: partBuckets[farLeg] });
+      orderedBuckets.push({ partId: farShoe, entries: partBuckets[farShoe] });
+      orderedBuckets.push({ partId: nearLeg, entries: partBuckets[nearLeg] });
+      orderedBuckets.push({ partId: nearShoe, entries: partBuckets[nearShoe] });
     }
+    orderedBuckets.push({ partId: 'bottomCore', entries: partBuckets.bottomCore });
 
-    // 3. Tay xa camera LUÔN vẽ trước thân áo & áo khoác
-    orderedBuckets.push(partBuckets[farArm]);
+    // Tay xa camera vẽ trước cụm thân trên
+    orderedBuckets.push({ partId: farArm, entries: partBuckets[farArm] });
     if (!nearArmInFront) {
-      orderedBuckets.push(partBuckets[nearArm]);
+      orderedBuckets.push({ partId: nearArm, entries: partBuckets[nearArm] });
     }
 
-    // 4. Mũ hoodie phía sau gáy vẽ trước thân khi nhìn mặt trước
+    // Mũ hoodie phía sau gáy vẽ trước thân khi nhìn mặt trước
     if (hoodBehindTorso) {
-      orderedBuckets.push(partBuckets.hoodBack);
+      orderedBuckets.push({ partId: 'hoodBack', entries: partBuckets.hoodBack });
     }
 
-    // 5. Thân áo trong & hông (`torsoCore`) LUÔN vẽ xong trước áo khoác ngoài (`outerwearShell`)
-    orderedBuckets.push(partBuckets.torsoCore);
-    orderedBuckets.push(partBuckets.outerwearShell);
+    // 3. `neckCavity`: lòng cổ áo tối màu (cổ áo trước sẽ tự che gọn phần dưới lòng cổ)
+    orderedBuckets.push({ partId: 'neckCavity', entries: partBuckets.neckCavity });
 
-    // 6. Mũ hoodie vẽ đè lên lưng áo khi nhìn từ phía sau
+    // 4. `torsoLayerGroup`: `top` + `outerwear` sắp xếp CHUNG từng mặt theo avgZ từ xa tới gần
+    //    (vạt xa -> áo trong -> vạt gần ở góc nghiêng; vạt áo khoác luôn trước áo trong ở góc 0°)
+    orderedBuckets.push({
+      partId: null,
+      entries: partBuckets.torsoCore.concat(partBuckets.outerwearShell),
+      detailParts: ['torsoCore', 'outerwearShell'],
+    });
+
+    // Mũ hoodie vẽ đè lên lưng áo khi nhìn từ phía sau
     if (!hoodBehindTorso) {
-      orderedBuckets.push(partBuckets.hoodBack);
+      orderedBuckets.push({ partId: 'hoodBack', entries: partBuckets.hoodBack });
     }
 
-    // 7. Tay gần camera vẽ sau cùng đè sạch lên thân áo / áo khoác khi ở góc nghiêng/ngang
+    // Tay gần camera vẽ sau cùng đè sạch lên thân áo / áo khoác khi ở góc nghiêng/ngang
     if (nearArmInFront) {
-      orderedBuckets.push(partBuckets[nearArm]);
+      orderedBuckets.push({ partId: nearArm, entries: partBuckets[nearArm] });
     }
 
     // =========================================================
-    // BẮT ĐẦU GHI SKIA PICTURE (BÓNG SÀN 2 LỚP + 3D PHÂN TẦNG)
+    // BẮT ĐẦU GHI SKIA PICTURE (BÓNG SÀN 2 LỚP + 3D PHÂN TẦNG + SURFACE DETAILS)
     // =========================================================
     const recorder = Skia.PictureRecorder();
     const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, stageW, stageH));
@@ -927,7 +1038,6 @@ export default function Outfit3DViewer({
       const sc = focal / denom;
       const shX = cx + sx3 * sc;
       const shY = cy - sy3 * sc + 3;
-      // Bóng đế giày co giãn nhẹ theo hướng mũi giày khi xoay ngang vs trực diện
       const aspect = 1 + Math.abs(sinY) * 0.35;
       const cw = Math.max(24, 42 * view.zoom * aspect);
       const ch = Math.max(10, 15 * view.zoom);
@@ -939,17 +1049,22 @@ export default function Outfit3DViewer({
       }
     }
 
-    // B. VẼ TOÀN BỘ MẶT TỨ GIÁC THEO THỨ TỰ PHÂN TẦNG (TẦNG 2: SORT TRONG TỪNG BỘ PHẬN)
-    const { pathBuilder, fillPaint, strokePaint } = res;
+    // B. VẼ TOÀN BỘ MẶT TỨ GIÁC + CHI TIẾT BỀ MẶT 3D THEO THỨ TỰ PHÂN TẦNG
+    const {
+      pathBuilder,
+      fillPaint,
+      strokePaint,
+      detailStrokePaint,
+      detailFillPaint,
+    } = res;
     const nextHitQuads: HitQuad[] = [];
     let renderedCount = 0;
 
     for (let b = 0; b < orderedBuckets.length; b++) {
-      const bucket = orderedBuckets[b];
+      const { partId, entries: bucket } = orderedBuckets[b];
       if (bucket.length === 0) continue;
 
       // Sắp xếp tầng 2 trong nội bộ bộ phận: theo (avgZ + zBias) từ xa đến gần
-      // Đảm bảo chi tiết mặt trước luôn nổi sạch trên ngực nhưng KHÔNG BAO GIỜ xuyên qua lưng khi xoay 180°!
       bucket.sort(
         (a, bItem) => a.avgZ + a.quad.zBias - (bItem.avgZ + bItem.quad.zBias)
       );
@@ -1001,15 +1116,28 @@ export default function Outfit3DViewer({
         // Viền Rim êm giúp màu Đen Than vẫn nổi khối 3D mịn, màu Trắng Tinh giữ nguyên độ trong trẻo
         const rimStrength = baseLuma < 80 ? 195 : baseLuma > 210 ? 28 : 96;
         const rimAdd = rim * rimStrength * q.ao;
+
+        // Độ bóng da nhẹ (Specular Highlight +25% cho Giày da / Cao gót)
+        let specAdd = 0;
+        if (q.shininess > 0) {
+          const [hx, hy, hz] = safeNormalize(
+            L1[0] + entry.vx,
+            L1[1] + entry.vy,
+            L1[2] + entry.vz
+          );
+          const dotH = Math.max(0, entry.snx * hx + entry.sny * hy + entry.snz * hz);
+          specAdd = Math.pow(dotH, 12) * q.shininess * 245 * q.ao;
+        }
+
         const pulseAdd =
           activeSlot && q.slot === activeSlot
             ? view.pulse * 26 + rim * 38
             : 0;
 
         const hex = rgbToHexFast(
-          baseRgb.r * shade + rimAdd + pulseAdd,
-          baseRgb.g * shade + rimAdd + pulseAdd,
-          baseRgb.b * shade + rimAdd + pulseAdd
+          baseRgb.r * shade + rimAdd + specAdd + pulseAdd,
+          baseRgb.g * shade + rimAdd + specAdd + pulseAdd,
+          baseRgb.b * shade + rimAdd + specAdd + pulseAdd
         );
 
         const skColor = Skia.Color(hex);
@@ -1044,6 +1172,100 @@ export default function Outfit3DViewer({
           });
         }
       }
+
+      // C. VẼ 3D PROJECTED SURFACE DETAILS THUỘC BỘ PHẬN NÀY NGAY SAU KHI VẼ QUADS CỦA NÓ
+      // (Chỉ vẽ khi pháp tuyến hướng về camera: dot(rotNormal, viewDir) > 0.12 -> KHÔNG BAO GIỜ XUYÊN THẤU!)
+      const targetDetailParts: MeshPartId[] =
+        orderedBuckets[b].detailParts ?? (partId !== null ? [partId] : []);
+      for (let dpi = 0; dpi < targetDetailParts.length; dpi++) {
+        const dPart = targetDetailParts[dpi];
+        const partLines = detailsByPart.lines[dPart];
+        for (let li = 0; li < partLines.length; li++) {
+          const line = partLines[li];
+          const pts = line.points;
+          if (pts.length < 2) continue;
+
+          // Kiểm tra hướng pháp tuyến tại trung điểm đường chỉ so với tia nhìn phối cảnh
+          const midPt = pts[pts.length >> 1];
+          const [rmx, rmy, rmz] = rotPoint(midPt);
+          const [vx, vy, vz] = safeNormalize(-rmx, -rmy, cameraZ - rmz);
+          const [rnx, rny, rnz] = rotPoint(line.normal);
+          if (rnx * vx + rny * vy + rnz * vz <= 0.12) continue;
+
+          const baseRgb = materialRgbMap[line.material];
+          const baseLuma =
+            0.2126 * baseRgb.r + 0.7152 * baseRgb.g + 0.0722 * baseRgb.b;
+          detailStrokePaint.setColor(
+            Skia.Color(resolveDetailLineColor(line.style, baseLuma))
+          );
+          detailStrokePaint.setStrokeWidth(
+            Math.max(0.75, line.width * (0.82 + view.zoom * 0.22))
+          );
+
+          pathBuilder.reset();
+          let started = false;
+          for (let pi = 0; pi < pts.length; pi++) {
+            const [rx, ry, rz] = rotPoint(pts[pi]);
+            const denom = Math.max(1.2, cameraZ - rz);
+            const sc = focal / denom;
+            const px = cx + rx * sc;
+            const py = cy - ry * sc;
+            if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+            if (!started) {
+              pathBuilder.moveTo(px, py);
+              started = true;
+            } else {
+              pathBuilder.lineTo(px, py);
+            }
+          }
+          if (started) {
+            const linePath = pathBuilder.detach();
+            canvas.drawPath(linePath, detailStrokePaint);
+            linePath.dispose();
+          }
+        }
+
+        const partDots = detailsByPart.dots[dPart];
+        for (let di = 0; di < partDots.length; di++) {
+          const dot = partDots[di];
+          const [rcx, rcy, rcz] = rotPoint(dot.center);
+          const [vx, vy, vz] = safeNormalize(-rcx, -rcy, cameraZ - rcz);
+          const [rnx, rny, rnz] = rotPoint(dot.normal);
+          if (rnx * vx + rny * vy + rnz * vz <= 0.12) continue;
+
+          const denom = Math.max(1.2, cameraZ - rcz);
+          const sc = focal / denom;
+          const sx = cx + rcx * sc;
+          const sy = cy - rcy * sc;
+          const r = Math.max(1.4, Math.min(5.2, dot.radius * sc));
+          if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(r)) {
+            continue;
+          }
+
+          const baseRgb = materialRgbMap[dot.material];
+          const baseLuma =
+            0.2126 * baseRgb.r + 0.7152 * baseRgb.g + 0.0722 * baseRgb.b;
+          const isDark = baseLuma < 78;
+
+          if (dot.style === 'button') {
+            detailFillPaint.setColor(Skia.Color(isDark ? '#E5E7EB' : '#1F2937'));
+            detailStrokePaint.setColor(
+              Skia.Color(isDark ? 'rgba(17, 24, 39, 0.5)' : 'rgba(255, 255, 255, 0.45)')
+            );
+          } else if (dot.style === 'aglet') {
+            detailFillPaint.setColor(Skia.Color('#BCC4D0'));
+            detailStrokePaint.setColor(Skia.Color('rgba(17, 24, 39, 0.42)'));
+          } else {
+            // buckle / metal rivet
+            detailFillPaint.setColor(Skia.Color('#CCA65E'));
+            detailStrokePaint.setColor(Skia.Color('rgba(17, 24, 39, 0.45)'));
+          }
+          detailStrokePaint.setStrokeWidth(0.75);
+
+          canvas.drawCircle(sx, sy, r, detailFillPaint);
+          canvas.drawCircle(sx, sy, r, detailStrokePaint);
+        }
+      }
     }
 
     hitQuadsRef.current = nextHitQuads;
@@ -1054,7 +1276,7 @@ export default function Outfit3DViewer({
       renderedQuadCount: renderedCount,
       debugReason: renderedCount === 0 ? 'All quads failed finite check' : '',
     };
-  }, [mesh, stageSize, view, materialRgbMap, activeSlot]);
+  }, [mesh, detailsByPart, stageSize, view, materialRgbMap, activeSlot]);
 
   return (
     <View
