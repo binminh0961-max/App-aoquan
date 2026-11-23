@@ -95,3 +95,23 @@ export interface OutfitSuggestion {
   slots: OutfitSlots;
   proportions: OutfitProportions;
 }
+
+// ================= CHẤM ĐIỂM 2 MÓN & PRESET STUDIO =================
+export interface MatchItemSelection {
+  slot: OutfitSlotId;
+  color: FashionColor;
+}
+
+export interface CompareContext {
+  mode: 'pick_second' | 'rescan_item1' | 'rescan_item2';
+  item1?: MatchItemSelection;
+  item2?: MatchItemSelection;
+}
+
+export interface StudioPresetOutfit {
+  isLayering: boolean;
+  gender: SilhouetteStyleType;
+  lockedSlots: OutfitSlotId[];
+  colors: Partial<Record<OutfitSlotId, FashionColor>>;
+  sourceSlot: OutfitSlotId;
+}

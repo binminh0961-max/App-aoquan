@@ -1,5 +1,5 @@
 // src/screens/ImagePickerScreen.tsx
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -29,10 +29,19 @@ import {
   releaseImageBuffer,
 } from '../utils/imagePixelReader';
 import { LightingMode } from '../services/ColorEngine';
+import { shortColorName } from '../engine/OutfitEngine';
+import { CompareContext, MatchItemSelection, OutfitSlotId } from '../types/outfit';
 import { RootStackParamList } from '../../App';
 
 type ImagePickerRouteProp = RouteProp<RootStackParamList, 'ImagePicker'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'ImagePicker'>;
+
+const SLOT_SHORT_LABELS: Record<OutfitSlotId, string> = {
+  top: 'Áo',
+  outerwear: 'Áo khoác',
+  bottom: 'Quần/Váy',
+  shoes: 'Giày',
+};
 
 const LIGHTING_MODES: { key: LightingMode; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: 'auto', label: 'Tự động', icon: 'sparkles' },
@@ -48,6 +57,17 @@ export const ImagePickerScreen: React.FC = () => {
   const [currentImageUri, setCurrentImageUri] = useState<string>(
     route.params?.imageUri || SAMPLE_FABRIC_IMAGES[0]
   );
+
+  // Chế độ so sánh 2 món (giữ nguyên khi chuyển qua lại giữa Camera và Thư viện ảnh)
+  const [compareContext, setCompareContext] = useState<CompareContext | null>(
+    route.params?.compareContext ?? null
+  );
+
+  useEffect(() => {
+    if (route.params?.compareContext) {
+      setCompareContext(route.params.compareContext);
+    }
+  }, [route.params?.compareContext]);
 
   // URI và kích thước ảnh đã qua ImageManipulator (đã chuẩn hóa xoay EXIF và resize 500px)
   const [manipulatedUri, setManipulatedUri] = useState<string | null>(null);
@@ -184,12 +204,110 @@ export const ImagePickerScreen: React.FC = () => {
     }
   };
 
+  const handleStartCompareSecond = useCallback(() => {
+    const firstItem: MatchItemSelection = {
+      slot: 'top',
+      color: selectedColor,
+    };
+    setCompareContext({
+      mode: 'pick_second',
+      item1: firstItem,
+    });
+  }, [selectedColor]);
+
+  const handleCancelCompare = useCallback(() => {
+    setCompareContext(null);
+    navigation.setParams({ compareContext: undefined });
+  }, [navigation]);
+
+  const handleSwitchToCameraCompare = useCallback(() => {
+    if (!compareContext) return;
+    navigation.navigate('CameraPicker', { compareContext });
+  }, [compareContext, navigation]);
+
   const handleConfirmMatch = () => {
+    if (compareContext) {
+      let finalItem1: MatchItemSelection;
+      let finalItem2: MatchItemSelection;
+
+      if (compareContext.mode === 'rescan_item1' && compareContext.item2) {
+        const slot1: OutfitSlotId =
+          compareContext.item1?.slot ||
+          (compareContext.item2.slot === 'top' ? 'bottom' : 'top');
+        finalItem1 = { slot: slot1, color: selectedColor };
+        finalItem2 = compareContext.item2;
+      } else if (compareContext.mode === 'rescan_item2' && compareContext.item1) {
+        const slot2: OutfitSlotId =
+          compareContext.item2?.slot ||
+          (compareContext.item1.slot === 'bottom' ? 'top' : 'bottom');
+        finalItem1 = compareContext.item1;
+        finalItem2 = { slot: slot2, color: selectedColor };
+      } else {
+        const item1 = compareContext.item1 || {
+          slot: 'top' as OutfitSlotId,
+          color: FASHION_COLORS[0],
+        };
+        const slot2: OutfitSlotId = item1.slot === 'bottom' ? 'top' : 'bottom';
+        finalItem1 = item1;
+        finalItem2 = { slot: slot2, color: selectedColor };
+      }
+
+      navigation.navigate('MatchChecker', {
+        item1: finalItem1,
+        item2: finalItem2,
+      });
+      return;
+    }
+
     navigation.navigate('OutfitSuggestion', {
       baseColor: selectedColor,
       baseRole: 'top',
     });
   };
+
+  const compareBannerInfo = useMemo(() => {
+    if (!compareContext) return null;
+
+    if (compareContext.mode === 'rescan_item1') {
+      const targetSlot = compareContext.item1?.slot || 'top';
+      const kept = compareContext.item2;
+      return {
+        badge: 'Hút lại Món 1',
+        swatchHex: kept?.color.hex || '#111827',
+        heldText: kept
+          ? `Món 2 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
+          : 'Đang cập nhật Món 1',
+        guideText: `Di ngón tay chọn màu Món 1 (${SLOT_SHORT_LABELS[targetSlot]}) trên ảnh`,
+        ctaLabel: 'Cập nhật & Chấm điểm →',
+      };
+    }
+
+    if (compareContext.mode === 'rescan_item2') {
+      const targetSlot = compareContext.item2?.slot || 'bottom';
+      const kept = compareContext.item1;
+      return {
+        badge: 'Hút lại Món 2',
+        swatchHex: kept?.color.hex || '#111827',
+        heldText: kept
+          ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
+          : 'Đang cập nhật Món 2',
+        guideText: `Di ngón tay chọn màu Món 2 (${SLOT_SHORT_LABELS[targetSlot]}) trên ảnh`,
+        ctaLabel: 'Cập nhật & Chấm điểm →',
+      };
+    }
+
+    const kept = compareContext.item1;
+    const nextSlot: OutfitSlotId = kept?.slot === 'bottom' ? 'top' : 'bottom';
+    return {
+      badge: 'Bước 2/2',
+      swatchHex: kept?.color.hex || '#111827',
+      heldText: kept
+        ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
+        : 'Đã chọn Món 1',
+      guideText: `Chấm vùng vải Món 2 (${SLOT_SHORT_LABELS[nextSlot]}), đổi ảnh hoặc mở Camera`,
+      ctaLabel: 'Chấm điểm 2 món này →',
+    };
+  }, [compareContext]);
 
   const activeDisplayUri = manipulatedUri || currentImageUri;
 
@@ -290,19 +408,67 @@ export const ImagePickerScreen: React.FC = () => {
           onPositionChange={handlePositionChange}
         />
 
-        {/* Gợi ý hướng dẫn */}
-        {!isLoadingImage && (
-          <View style={styles.hintPill} pointerEvents="none">
-            <Ionicons
-              name="scan-outline"
-              size={13}
-              color="#FFFFFF"
-              style={{ marginRight: 6 }}
-            />
-            <Text style={styles.hintText}>
-              Di 1 ngón để soi pixel • Kẹp 2 ngón để phóng to/kéo
+        {/* Banner chế độ So sánh 2 món hoặc Gợi ý hướng dẫn */}
+        {compareBannerInfo ? (
+          <View style={styles.compareBanner}>
+            <View style={styles.compareBannerTopRow}>
+              <View style={styles.compareHeldLeft}>
+                <View style={styles.compareStepBadge}>
+                  <Text style={styles.compareStepBadgeText}>
+                    {compareBannerInfo.badge}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.compareSwatchDot,
+                    { backgroundColor: compareBannerInfo.swatchHex },
+                  ]}
+                />
+                <Text style={styles.compareHeldText} numberOfLines={1}>
+                  {compareBannerInfo.heldText}
+                </Text>
+              </View>
+
+              <View style={styles.compareBannerActions}>
+                <TouchableOpacity
+                  style={styles.compareCameraBtn}
+                  onPress={handleSwitchToCameraCompare}
+                  activeOpacity={0.78}
+                  hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                >
+                  <Ionicons name="camera-outline" size={13} color="#FFFFFF" />
+                  <Text style={styles.compareActionBtnText}>Camera</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.compareCancelBtn}
+                  onPress={handleCancelCompare}
+                  activeOpacity={0.78}
+                  hitSlop={{ top: 6, bottom: 6, left: 4, right: 6 }}
+                >
+                  <Ionicons name="close" size={13} color="#FFFFFF" />
+                  <Text style={styles.compareActionBtnText}>Hủy</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            <Text style={styles.compareGuideText} numberOfLines={1}>
+              {compareBannerInfo.guideText}
             </Text>
           </View>
+        ) : (
+          !isLoadingImage && (
+            <View style={styles.hintPill} pointerEvents="none">
+              <Ionicons
+                name="scan-outline"
+                size={13}
+                color="#FFFFFF"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.hintText}>
+                Di 1 ngón để soi pixel • Kẹp 2 ngón để phóng to/kéo
+              </Text>
+            </View>
+          )
         )}
       </View>
 
@@ -315,6 +481,11 @@ export const ImagePickerScreen: React.FC = () => {
         onSelectShade={handleSelectShade}
         onSelectColor={handleSelectColor}
         onConfirm={handleConfirmMatch}
+        primaryButtonLabel={
+          compareBannerInfo ? compareBannerInfo.ctaLabel : 'Phối đồ với màu này →'
+        }
+        secondaryButtonLabel={!compareContext ? 'So với món thứ 2' : undefined}
+        onSecondaryPress={!compareContext ? handleStartCompareSecond : undefined}
       />
     </View>
   );
@@ -444,5 +615,88 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 11.5,
     fontWeight: '500',
+  },
+  compareBanner: {
+    position: 'absolute',
+    top: 10,
+    left: 12,
+    right: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 16,
+    backgroundColor: 'rgba(17, 24, 39, 0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    zIndex: 15,
+  },
+  compareBannerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  compareHeldLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 8,
+  },
+  compareStepBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    marginRight: 6,
+  },
+  compareStepBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  compareSwatchDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    marginRight: 6,
+  },
+  compareHeldText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  compareBannerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  compareCameraBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  compareCancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  compareActionBtnText: {
+    color: '#FFFFFF',
+    fontSize: 10.5,
+    fontWeight: '700',
+    marginLeft: 3,
+  },
+  compareGuideText: {
+    color: '#E5E7EB',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 5,
   },
 });

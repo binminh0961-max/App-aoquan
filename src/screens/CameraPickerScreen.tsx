@@ -21,7 +21,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation, useIsFocused } from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute, useIsFocused } from '@react-navigation/native';
 
 import { CameraReticle } from '../components/CameraReticle';
 import { LivePreviewCard } from '../components/LivePreviewCard';
@@ -32,9 +32,19 @@ import {
   SAMPLE_FABRIC_IMAGES,
 } from '../constants/fashionColors';
 import { useCameraColorSampler } from '../hooks/useCameraColorSampler';
+import { shortColorName } from '../engine/OutfitEngine';
+import { CompareContext, MatchItemSelection, OutfitSlotId } from '../types/outfit';
 import { RootStackParamList } from '../../App';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'CameraPicker'>;
+type CameraRouteProp = RouteProp<RootStackParamList, 'CameraPicker'>;
+
+const SLOT_SHORT_LABELS: Record<OutfitSlotId, string> = {
+  top: 'Áo',
+  outerwear: 'Áo khoác',
+  bottom: 'Quần/Váy',
+  shoes: 'Giày',
+};
 
 const LIGHT_ENVIRONMENTS = [
   { label: 'Tự động', mode: 'auto' as LightingMode, icon: 'sunny-outline' as const },
@@ -44,9 +54,15 @@ const LIGHT_ENVIRONMENTS = [
 
 export const CameraPickerScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
+  const route = useRoute<CameraRouteProp>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<Camera>(null);
+
+  // Chế độ so sánh 2 món (Bước 2/2 hoặc Hút lại Món 1 / Món 2)
+  const [compareContext, setCompareContext] = useState<CompareContext | null>(
+    route.params?.compareContext ?? null
+  );
 
   // 1. Quản lý quyền Camera & Thiết bị Camera
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -126,6 +142,14 @@ export const CameraPickerScreen: React.FC = () => {
   const [selectedColor, setSelectedColor] = useState<FashionColor>(FASHION_COLORS[0]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Sync compareContext khi điều hướng truyền vào (VD: Hút lại từ MatchChecker hoặc chuyển từ ImagePicker)
+  useEffect(() => {
+    if (route.params?.compareContext) {
+      setCompareContext(route.params.compareContext);
+      unfreeze();
+    }
+  }, [route.params?.compareContext, unfreeze]);
+
   // Sync selectedColor when currentColorResult updates while active
   useEffect(() => {
     if (!isFrozen) {
@@ -184,6 +208,7 @@ export const CameraPickerScreen: React.FC = () => {
   };
 
   const openImagePicker = async () => {
+    const activeCtx = compareContext || undefined;
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
@@ -192,19 +217,138 @@ export const CameraPickerScreen: React.FC = () => {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        navigation.navigate('ImagePicker', { imageUri: result.assets[0].uri });
+        navigation.navigate('ImagePicker', {
+          imageUri: result.assets[0].uri,
+          compareContext: activeCtx,
+        });
       }
     } catch {
-      navigation.navigate('ImagePicker', { imageUri: SAMPLE_FABRIC_IMAGES[0] });
+      navigation.navigate('ImagePicker', {
+        imageUri: SAMPLE_FABRIC_IMAGES[0],
+        compareContext: activeCtx,
+      });
     }
   };
 
+  const handleStartCompareSecond = useCallback(() => {
+    const firstItem: MatchItemSelection = {
+      slot: 'top',
+      color: selectedColor,
+    };
+    const nextCtx: CompareContext = {
+      mode: 'pick_second',
+      item1: firstItem,
+    };
+    setCompareContext(nextCtx);
+    unfreeze();
+    showToast(`Đã giữ Món 1 (${shortColorName(selectedColor.name)}) • Hãy soi Món 2`);
+  }, [selectedColor, unfreeze]);
+
+  const handleCancelCompare = useCallback(() => {
+    if (
+      (compareContext?.mode === 'rescan_item1' ||
+        compareContext?.mode === 'rescan_item2') &&
+      navigation.canGoBack()
+    ) {
+      navigation.goBack();
+      return;
+    }
+    setCompareContext(null);
+    navigation.setParams({ compareContext: undefined });
+    unfreeze();
+  }, [compareContext?.mode, navigation, unfreeze]);
+
   const handleConfirmMatch = () => {
+    if (compareContext) {
+      let finalItem1: MatchItemSelection;
+      let finalItem2: MatchItemSelection;
+
+      if (compareContext.mode === 'rescan_item1' && compareContext.item2) {
+        const slot1: OutfitSlotId =
+          compareContext.item1?.slot ||
+          (compareContext.item2.slot === 'top' ? 'bottom' : 'top');
+        finalItem1 = { slot: slot1, color: selectedColor };
+        finalItem2 = compareContext.item2;
+      } else if (compareContext.mode === 'rescan_item2' && compareContext.item1) {
+        const slot2: OutfitSlotId =
+          compareContext.item2?.slot ||
+          (compareContext.item1.slot === 'bottom' ? 'top' : 'bottom');
+        finalItem1 = compareContext.item1;
+        finalItem2 = { slot: slot2, color: selectedColor };
+      } else {
+        // pick_second
+        const item1 = compareContext.item1 || {
+          slot: 'top' as OutfitSlotId,
+          color: FASHION_COLORS[0],
+        };
+        const slot2: OutfitSlotId = item1.slot === 'bottom' ? 'top' : 'bottom';
+        finalItem1 = item1;
+        finalItem2 = { slot: slot2, color: selectedColor };
+      }
+
+      const wasPickSecond = compareContext.mode === 'pick_second';
+      unfreeze();
+      if (wasPickSecond) {
+        setCompareContext(null);
+        navigation.setParams({ compareContext: undefined });
+      }
+      navigation.navigate('MatchChecker', {
+        item1: finalItem1,
+        item2: finalItem2,
+      });
+      return;
+    }
+
     navigation.navigate('OutfitSuggestion', {
       baseColor: selectedColor,
       baseRole: 'top',
     });
   };
+
+  // Thông tin hiển thị trên thanh banner kính mờ khi đang so sánh 2 món
+  const compareBannerInfo = useMemo(() => {
+    if (!compareContext) return null;
+
+    if (compareContext.mode === 'rescan_item1') {
+      const targetSlot = compareContext.item1?.slot || 'top';
+      const kept = compareContext.item2;
+      return {
+        badge: 'Hút lại Món 1',
+        swatchHex: kept?.color.hex || '#111827',
+        heldText: kept
+          ? `Món 2 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
+          : 'Đang cập nhật Món 1',
+        guideText: `Chĩa camera vào Món 1 (${SLOT_SHORT_LABELS[targetSlot]}) để cập nhật màu`,
+        ctaLabel: 'Cập nhật & Chấm điểm →',
+      };
+    }
+
+    if (compareContext.mode === 'rescan_item2') {
+      const targetSlot = compareContext.item2?.slot || 'bottom';
+      const kept = compareContext.item1;
+      return {
+        badge: 'Hút lại Món 2',
+        swatchHex: kept?.color.hex || '#111827',
+        heldText: kept
+          ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
+          : 'Đang cập nhật Món 2',
+        guideText: `Chĩa camera vào Món 2 (${SLOT_SHORT_LABELS[targetSlot]}) để cập nhật màu`,
+        ctaLabel: 'Cập nhật & Chấm điểm →',
+      };
+    }
+
+    const kept = compareContext.item1;
+    const nextSlot: OutfitSlotId = kept?.slot === 'bottom' ? 'top' : 'bottom';
+    return {
+      badge: 'Bước 2/2',
+      swatchHex: kept?.color.hex || '#111827',
+      heldText: kept
+        ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
+        : 'Đã chọn Món 1',
+      guideText: `Chĩa camera vào Món 2 (${SLOT_SHORT_LABELS[nextSlot]}) để chấm điểm`,
+      ctaLabel: 'Chấm điểm 2 món này →',
+    };
+  }, [compareContext]);
 
   // Danh sách các sắc độ lân cận cho người dùng tinh chỉnh trong chế độ Freeze
   const shadeOptions = useMemo(() => {
@@ -365,6 +509,43 @@ export const CameraPickerScreen: React.FC = () => {
             <View style={styles.headerRightPlaceholder} />
           )}
         </View>
+
+        {/* Thanh banner kính mờ khi đang ở chế độ So sánh Bước 2/2 hoặc Hút lại */}
+        {compareBannerInfo && (
+          <View style={styles.compareBanner}>
+            <View style={styles.compareBannerTopRow}>
+              <View style={styles.compareHeldLeft}>
+                <View style={styles.compareStepBadge}>
+                  <Text style={styles.compareStepBadgeText}>
+                    {compareBannerInfo.badge}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.compareSwatchDot,
+                    { backgroundColor: compareBannerInfo.swatchHex },
+                  ]}
+                />
+                <Text style={styles.compareHeldText} numberOfLines={1}>
+                  {compareBannerInfo.heldText}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.compareCancelBtn}
+                onPress={handleCancelCompare}
+                activeOpacity={0.78}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="close" size={13} color="#FFFFFF" />
+                <Text style={styles.compareCancelText}>Hủy</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.compareGuideText} numberOfLines={1}>
+              {compareBannerInfo.guideText}
+            </Text>
+          </View>
+        )}
       </SafeAreaView>
 
       {/* Tâm ngắm Reticle (Đồng trục tuyệt đối với tâm cảm biến camera 100%) */}
@@ -540,9 +721,32 @@ export const CameraPickerScreen: React.FC = () => {
                 onPress={handleConfirmMatch}
                 activeOpacity={0.88}
               >
-                <Text style={styles.primaryActionText}>Phối đồ với màu này →</Text>
+                <Text style={styles.primaryActionText}>
+                  {compareBannerInfo
+                    ? compareBannerInfo.ctaLabel
+                    : 'Phối đồ với màu này →'}
+                </Text>
               </TouchableOpacity>
             </View>
+
+            {/* Nút phụ nổi bật: So với món thứ 2 (chỉ hiện ở bước chọn Món 1) */}
+            {!compareContext && (
+              <TouchableOpacity
+                style={styles.compareSecondBtn}
+                onPress={handleStartCompareSecond}
+                activeOpacity={0.82}
+              >
+                <Ionicons
+                  name="git-compare-outline"
+                  size={17}
+                  color="#111827"
+                  style={styles.compareSecondIcon}
+                />
+                <Text style={styles.compareSecondBtnText}>
+                  So với món thứ 2
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </View>
@@ -953,6 +1157,92 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
+  },
+  compareSecondBtn: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    paddingVertical: 12,
+    borderWidth: 1.5,
+    borderColor: '#111827',
+  },
+  compareSecondIcon: {
+    marginRight: 7,
+  },
+  compareSecondBtnText: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  compareBanner: {
+    marginHorizontal: 14,
+    marginTop: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 16,
+    backgroundColor: 'rgba(17, 24, 39, 0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+  },
+  compareBannerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  compareHeldLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 8,
+  },
+  compareStepBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    marginRight: 7,
+  },
+  compareStepBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10.5,
+    fontWeight: '700',
+  },
+  compareSwatchDot: {
+    width: 15,
+    height: 15,
+    borderRadius: 7.5,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    marginRight: 6,
+  },
+  compareHeldText: {
+    color: '#FFFFFF',
+    fontSize: 12.5,
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  compareCancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  compareCancelText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 2,
+  },
+  compareGuideText: {
+    color: '#E5E7EB',
+    fontSize: 11.5,
+    fontWeight: '500',
+    marginTop: 5,
   },
   toastContainer: {
     position: 'absolute',

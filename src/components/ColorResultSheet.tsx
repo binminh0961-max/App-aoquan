@@ -12,6 +12,10 @@ interface Props {
   onSelectShade?: (hex: string) => void;
   onSelectColor?: (color: FashionColor) => void;
   onConfirm: () => void;
+  primaryButtonLabel?: string;
+  secondaryButtonLabel?: string;
+  secondaryButtonIcon?: keyof typeof Ionicons.glyphMap;
+  onSecondaryPress?: () => void;
 }
 
 export const ColorResultSheet: React.FC<Props> = ({
@@ -22,6 +26,10 @@ export const ColorResultSheet: React.FC<Props> = ({
   onSelectShade,
   onSelectColor,
   onConfirm,
+  primaryButtonLabel = 'Phối đồ với màu này →',
+  secondaryButtonLabel,
+  secondaryButtonIcon = 'git-compare-outline',
+  onSecondaryPress,
 }) => {
   const currentHex = activeHex || color.hex;
 
@@ -140,8 +148,25 @@ export const ColorResultSheet: React.FC<Props> = ({
         onPress={onConfirm}
         activeOpacity={0.88}
       >
-        <Text style={styles.confirmButtonText}>Phối đồ với màu này →</Text>
+        <Text style={styles.confirmButtonText}>{primaryButtonLabel}</Text>
       </TouchableOpacity>
+
+      {/* Secondary Action Button (e.g. So với món thứ 2) */}
+      {secondaryButtonLabel && onSecondaryPress && (
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={onSecondaryPress}
+          activeOpacity={0.82}
+        >
+          <Ionicons
+            name={secondaryButtonIcon}
+            size={17}
+            color="#111827"
+            style={styles.secondaryButtonIcon}
+          />
+          <Text style={styles.secondaryButtonText}>{secondaryButtonLabel}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 };
@@ -317,5 +342,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     letterSpacing: 0.3,
+  },
+  secondaryButton: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    paddingVertical: 12,
+    borderWidth: 1.5,
+    borderColor: '#111827',
+  },
+  secondaryButtonIcon: {
+    marginRight: 7,
+  },
+  secondaryButtonText: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

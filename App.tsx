@@ -10,12 +10,26 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { CameraPickerScreen } from './src/screens/CameraPickerScreen';
 import { ImagePickerScreen } from './src/screens/ImagePickerScreen';
 import { OutfitSuggestionScreen } from './src/screens/OutfitSuggestionScreen';
+import { MatchCheckerScreen } from './src/screens/MatchCheckerScreen';
 import { FashionColor } from './src/constants/fashionColors';
+import {
+  CompareContext,
+  MatchItemSelection,
+  StudioPresetOutfit,
+} from './src/types/outfit';
 
 export type RootStackParamList = {
-  CameraPicker: undefined;
-  ImagePicker: { imageUri?: string } | undefined;
-  OutfitSuggestion: { baseColor: FashionColor; baseRole?: 'top' | 'bottom' };
+  CameraPicker: { compareContext?: CompareContext } | undefined;
+  ImagePicker: { imageUri?: string; compareContext?: CompareContext } | undefined;
+  OutfitSuggestion: {
+    baseColor: FashionColor;
+    baseRole?: 'top' | 'bottom';
+    initialPresetOutfit?: StudioPresetOutfit;
+  };
+  MatchChecker: {
+    item1: MatchItemSelection;
+    item2: MatchItemSelection;
+  };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -40,6 +54,13 @@ export default function App() {
               component={OutfitSuggestionScreen}
               options={{
                 contentStyle: { backgroundColor: '#A8A8A5' },
+              }}
+            />
+            <Stack.Screen
+              name="MatchChecker"
+              component={MatchCheckerScreen}
+              options={{
+                contentStyle: { backgroundColor: '#F5F5F3' },
               }}
             />
           </Stack.Navigator>

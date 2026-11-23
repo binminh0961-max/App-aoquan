@@ -24,6 +24,7 @@ import { LookbookItemCard } from '../components/LookbookItemCard';
 import { ColorPaletteSheet } from '../components/ColorPaletteSheet';
 import {
   initStudioOutfit,
+  initStudioOutfitFromPreset,
   toggleLayeringMode,
   shuffleOutfitColors,
   updateSlotSilhouette,
@@ -80,10 +81,13 @@ export const InteractiveMixStudio: React.FC = () => {
   // Màu gốc từ khâu hút màu Camera / Ảnh (fallback Be Cát nếu mở trực tiếp)
   const baseColor: FashionColor = route.params?.baseColor || FASHION_COLORS[4];
   const initialRole: 'top' | 'bottom' = route.params?.baseRole || 'top';
+  const initialPresetOutfit = route.params?.initialPresetOutfit;
 
-  // State chính của Studio (mặc định Nam)
+  // State chính của Studio (khởi tạo từ preset 2 món nếu có, giữ nguyên luồng 1 màu như cũ)
   const [studioState, setStudioState] = useState<StudioOutfitState>(() =>
-    initStudioOutfit(baseColor, initialRole, 'male')
+    initialPresetOutfit
+      ? initStudioOutfitFromPreset(initialPresetOutfit, baseColor)
+      : initStudioOutfit(baseColor, initialRole, 'male')
   );
   const studioStateRef = useRef<StudioOutfitState>(studioState);
   studioStateRef.current = studioState;
@@ -121,7 +125,9 @@ export const InteractiveMixStudio: React.FC = () => {
   }, []);
 
   // Món đang chọn để chỉnh phom dáng / màu sắc
-  const [activeSlot, setActiveSlot] = useState<OutfitSlotId>(initialRole);
+  const [activeSlot, setActiveSlot] = useState<OutfitSlotId>(
+    initialPresetOutfit?.sourceSlot || initialRole
+  );
 
   // Điều khiển góc nhìn 3D
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('threeQuarter');

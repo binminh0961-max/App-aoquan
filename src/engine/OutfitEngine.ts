@@ -27,6 +27,7 @@ import {
   FabricColorGroup,
   PaletteDisplayGroupId,
   OutfitAdvice,
+  StudioPresetOutfit,
 } from '../types/outfit';
 
 export interface HSL {
@@ -720,6 +721,95 @@ export function initStudioOutfit(
     harmonyTitle: 'Phối màu Trung tính Cơ bản',
     harmonyDescription: `Màu chủ đạo ${baseColor.name} được khóa làm tâm điểm, phối cùng các sắc độ trung tính tạo chiều sâu trang nhã.`,
     harmonyType: 'neutral',
+  };
+}
+
+/**
+ * Khởi tạo StudioOutfitState trực tiếp từ preset 2 món + màu cầu nối (từ MatchCheckerScreen).
+ * Khóa sẵn đúng 2 món vừa chấm điểm, áp màu cầu nối cho món còn lại, giữ đúng giới tính & isLayering.
+ */
+export function initStudioOutfitFromPreset(
+  preset: StudioPresetOutfit,
+  fallbackBaseColor: FashionColor
+): StudioOutfitState {
+  const { isLayering, gender, lockedSlots, colors, sourceSlot } = preset;
+  const scannedColor = colors[sourceSlot] || fallbackBaseColor;
+  const baseHsl = hexToHsl(scannedColor.hex);
+  const isBaseDark = baseHsl.l < 50;
+
+  const fallbackLight =
+    FASHION_COLORS.find(c => c.id === 'wb-1') || FASHION_COLORS[0];
+  const fallbackDark =
+    FASHION_COLORS.find(c => c.id === 'gb-1') || FASHION_COLORS[6];
+  const fallbackMid =
+    FASHION_COLORS.find(c => c.id === 'wb-5') || FASHION_COLORS[4];
+
+  const lockedSet = new Set<OutfitSlotId>(lockedSlots);
+
+  const outerColor =
+    colors.outerwear || (isBaseDark ? fallbackDark : FASHION_COLORS.find(c => c.id === 'bc-1') || fallbackDark);
+  const topColor =
+    colors.top || (isLayering ? (hexToHsl(outerColor.hex).l < 48 ? fallbackLight : fallbackDark) : isBaseDark ? fallbackLight : fallbackDark);
+  const bottomColor =
+    colors.bottom || (hexToHsl(topColor.hex).l < 48 ? fallbackMid : fallbackDark);
+  const shoesColor =
+    colors.shoes || (isBaseDark ? fallbackLight : fallbackDark);
+
+  const slots: OutfitSlotsMap = {
+    outerwear: {
+      id: 'outerwear',
+      label: 'Áo khoác',
+      color: outerColor,
+      silhouette: 'blazer',
+      locked: lockedSet.has('outerwear'),
+      isBase: sourceSlot === 'outerwear',
+    },
+    top: {
+      id: 'top',
+      label: isLayering ? 'Áo trong' : 'Áo chính',
+      color: topColor,
+      silhouette: 'tshirt',
+      locked: lockedSet.has('top'),
+      isBase: sourceSlot === 'top',
+    },
+    bottom: {
+      id: 'bottom',
+      label: gender === 'female' ? 'Chân váy' : 'Quần',
+      color: bottomColor,
+      silhouette: gender === 'female' ? 'a_line_skirt' : 'wide_pants',
+      locked: lockedSet.has('bottom'),
+      isBase: sourceSlot === 'bottom',
+    },
+    shoes: {
+      id: 'shoes',
+      label: 'Giày',
+      color: shoesColor,
+      silhouette: 'sneakers',
+      locked: lockedSet.has('shoes'),
+      isBase: sourceSlot === 'shoes',
+    },
+  };
+
+  const visualRatios = calculateVisualRatios(slots, isLayering);
+
+  const draft: StudioOutfitState = {
+    isLayering,
+    sourceSlot,
+    scannedColor,
+    slots,
+    styleType: gender,
+    visualRatios,
+    harmonyTitle: 'Phối màu Từ Chấm điểm 2 món',
+    harmonyDescription: '',
+    harmonyType: 'custom',
+  };
+
+  const advice = generateOutfitAdvice(draft);
+
+  return {
+    ...draft,
+    harmonyTitle: advice.title,
+    harmonyDescription: advice.reason,
   };
 }
 
