@@ -12,8 +12,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { FashionColor, FASHION_COLORS } from '../constants/fashionColors';
+import { OutfitSlotId, SkinUndertone } from '../types/outfit';
 import {
+  evaluateColorForUndertone,
   getGroupedFashionColors,
+  getUndertoneLabel,
   hexToHsl,
   shortColorName,
 } from '../engine/OutfitEngine';
@@ -21,6 +24,8 @@ import {
 export interface ColorPaletteSheetProps {
   visible: boolean;
   slotLabel: string;
+  slotId?: OutfitSlotId;
+  undertone?: SkinUndertone;
   selectedColorId: string;
   onSelectColor: (color: FashionColor) => void;
   onClose: () => void;
@@ -29,12 +34,20 @@ export interface ColorPaletteSheetProps {
 export const ColorPaletteSheet: React.FC<ColorPaletteSheetProps> = ({
   visible,
   slotLabel,
+  slotId,
+  undertone = 'neutral',
   selectedColorId,
   onSelectColor,
   onClose,
 }) => {
   const insets = useSafeAreaInsets();
   const sections = useMemo(() => getGroupedFashionColors(), []);
+
+  // Chỉ đánh dấu "Tôn da" cho các món nằm sát khuôn mặt (Áo / Áo khoác) khi chọn Da ấm hoặc Da lạnh
+  const showUndertoneHints =
+    (slotId === 'top' || slotId === 'outerwear') &&
+    (undertone === 'warm' || undertone === 'cool');
+  const undertoneLabel = getUndertoneLabel(undertone);
 
   return (
     <Modal
@@ -78,6 +91,16 @@ export const ColorPaletteSheet: React.FC<ColorPaletteSheetProps> = ({
             </TouchableOpacity>
           </View>
 
+          {/* Ghi chú đánh dấu màu tôn da cho món sát khuôn mặt */}
+          {showUndertoneHints && (
+            <View style={styles.undertoneBanner}>
+              <Ionicons name="sparkles" size={12} color="#B45309" />
+              <Text style={styles.undertoneBannerText}>
+                Đang đánh dấu màu tôn {undertoneLabel}
+              </Text>
+            </View>
+          )}
+
           {/* Danh sách 4 nhóm màu dạng lưới 5 cột */}
           <ScrollView
             style={styles.scrollArea}
@@ -99,6 +122,9 @@ export const ColorPaletteSheet: React.FC<ColorPaletteSheetProps> = ({
                     const hsl = hexToHsl(color.hex);
                     const tickColor = hsl.l > 64 ? '#111827' : '#FFFFFF';
                     const isVeryLight = hsl.l > 88;
+                    const isFlattering =
+                      showUndertoneHints &&
+                      evaluateColorForUndertone(color, undertone) === 'flattering';
 
                     return (
                       <TouchableOpacity
@@ -106,7 +132,9 @@ export const ColorPaletteSheet: React.FC<ColorPaletteSheetProps> = ({
                         style={styles.swatchCell}
                         onPress={() => onSelectColor(color)}
                         activeOpacity={0.78}
-                        accessibilityLabel={`Chọn màu ${color.name}`}
+                        accessibilityLabel={`Chọn màu ${color.name}${
+                          isFlattering ? `, tôn ${undertoneLabel}` : ''
+                        }`}
                       >
                         <View
                           style={[
@@ -129,6 +157,12 @@ export const ColorPaletteSheet: React.FC<ColorPaletteSheetProps> = ({
                               />
                             )}
                           </View>
+
+                          {isFlattering && (
+                            <View style={styles.flatteringStarDot}>
+                              <Ionicons name="star" size={8} color="#FFFFFF" />
+                            </View>
+                          )}
                         </View>
                         <Text
                           style={[
@@ -139,6 +173,11 @@ export const ColorPaletteSheet: React.FC<ColorPaletteSheetProps> = ({
                         >
                           {shortColorName(color.name)}
                         </Text>
+                        {isFlattering && (
+                          <View style={styles.flatteringBadge}>
+                            <Text style={styles.flatteringBadgeText}>Tôn da</Text>
+                          </View>
+                        )}
                       </TouchableOpacity>
                     );
                   })}
@@ -210,6 +249,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  undertoneBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FEF3C7',
+    paddingHorizontal: 18,
+    paddingVertical: 7,
+  },
+  undertoneBannerText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#92400E',
+    marginLeft: 6,
+  },
   scrollArea: {
     flexGrow: 0,
   },
@@ -257,9 +311,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: 'transparent',
+    position: 'relative',
   },
   swatchRingSelected: {
     borderColor: '#111827',
+  },
+  flatteringStarDot: {
+    position: 'absolute',
+    top: -1,
+    right: -1,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#F59E0B',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   swatchCircle: {
     width: 34,
@@ -284,6 +352,19 @@ const styles = StyleSheet.create({
   swatchLabelSelected: {
     color: '#111827',
     fontWeight: '800',
+  },
+  flatteringBadge: {
+    marginTop: 2,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 6,
+    backgroundColor: '#FEF3C7',
+  },
+  flatteringBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#B45309',
+    includeFontPadding: false,
   },
 });
 

@@ -6,7 +6,9 @@
 
 import { FashionColor, FASHION_COLORS } from '../constants/fashionColors';
 import {
+  evaluateColorForUndertone,
   FabricCatalogEntry,
+  getUndertoneLabel,
   hexToHsl,
   HSL,
   isNeutralColor,
@@ -14,12 +16,52 @@ import {
   STUDIO_FABRIC_CATALOG,
 } from './OutfitEngine';
 import {
-  evaluateColorForUndertone,
-  getUndertoneLabel,
+  FabricColorGroup,
+  OutfitSlotId,
   SkinUndertone,
-  UndertoneEvaluation,
-} from '../services/userPreferences';
-import { FabricColorGroup, OutfitSlotId } from '../types/outfit';
+  UndertoneFitLevel,
+} from '../types/outfit';
+
+interface UndertoneEvaluation {
+  score: number;
+  level: UndertoneFitLevel;
+  note: string;
+}
+
+function evaluateFaceUndertone(
+  color: FabricColor,
+  undertone: SkinUndertone
+): UndertoneEvaluation {
+  const fit = evaluateColorForUndertone(color, undertone);
+  const name = shortColorName(color.name);
+  const label = getUndertoneLabel(undertone);
+
+  if (fit === 'flattering') {
+    const score = undertone === 'neutral' ? 92 : 94;
+    return {
+      score,
+      level: fit,
+      note:
+        undertone === 'neutral'
+          ? `Sắc ${name} rất hợp ${label}, tạo tổng thể hài hòa và sáng gọn.`
+          : `Sắc ${name} rất tôn ${label}, giúp gương mặt rạng rỡ hơn.`,
+    };
+  }
+
+  if (fit === 'caution') {
+    return {
+      score: 69,
+      level: fit,
+      note: `Sắc ${name} hơi kén ${label} khi mặc sát mặt, nên cân bằng thêm bằng tông trung tính dịu.`,
+    };
+  }
+
+  return {
+    score: 84,
+    level: fit,
+    note: `${name} là gam dễ mặc, dung hòa ổn định với ${label}.`,
+  };
+}
 
 export type OutfitSlot = OutfitSlotId;
 export type FabricColor = FashionColor;
@@ -358,7 +400,7 @@ function computeThreeItemScore(
     bridgeSlot === 'top' || bridgeSlot === 'outerwear'
       ? Math.round(
           baseUndertoneScore * 0.4 +
-            evaluateColorForUndertone(bridge.color, undertone).score * 0.6
+            evaluateFaceUndertone(bridge.color, undertone).score * 0.6
         )
       : baseUndertoneScore;
 
@@ -748,16 +790,16 @@ export function evaluateTwoItemMatch(
       : null;
 
   if (topItem && outerItem) {
-    const topEval = evaluateColorForUndertone(topItem.color, undertone);
-    const outerEval = evaluateColorForUndertone(outerItem.color, undertone);
+    const topEval = evaluateFaceUndertone(topItem.color, undertone);
+    const outerEval = evaluateFaceUndertone(outerItem.color, undertone);
     undertoneScore = Math.round(topEval.score * 0.65 + outerEval.score * 0.35);
     faceEval = { slot: 'top', evalResult: topEval };
   } else if (topItem) {
-    const topEval = evaluateColorForUndertone(topItem.color, undertone);
+    const topEval = evaluateFaceUndertone(topItem.color, undertone);
     undertoneScore = topEval.score;
     faceEval = { slot: 'top', evalResult: topEval };
   } else if (outerItem) {
-    const outerEval = evaluateColorForUndertone(outerItem.color, undertone);
+    const outerEval = evaluateFaceUndertone(outerItem.color, undertone);
     undertoneScore = outerEval.score;
     faceEval = { slot: 'outerwear', evalResult: outerEval };
   }

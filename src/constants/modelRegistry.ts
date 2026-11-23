@@ -52,6 +52,7 @@ export const MODEL_REGISTRY: Partial<Record<ModelRegistryKey, ModelRegistryEntry
   male_outerwear_hoodie: { url: null },
 
   male_top_tshirt: { url: null },
+  male_top_polo: { url: null },
   male_top_shirt: { url: null },
   male_top_hoodie: { url: null },
   male_top_blazer: { url: null },
@@ -60,16 +61,19 @@ export const MODEL_REGISTRY: Partial<Record<ModelRegistryKey, ModelRegistryEntry
   male_bottom_jeans: { url: null },
   male_bottom_shorts: { url: null },
 
-  male_shoes_sneakers: { url: null },
-  male_shoes_loafers: { url: null },
-  male_shoes_boots: { url: null },
+  male_shoes_sneaker: { url: null },
+  male_shoes_loafer: { url: null },
+  male_shoes_dress_shoes: { url: null },
+  male_shoes_boot: { url: null },
 
   // ================= NỮ (FEMALE) =================
   female_outerwear_blazer: { url: null },
   female_outerwear_shirt: { url: null },
   female_outerwear_hoodie: { url: null },
 
+  female_top_baby_tee: { url: null },
   female_top_tshirt: { url: null },
+  female_top_blouse: { url: null },
   female_top_shirt: { url: null },
   female_top_hoodie: { url: null },
   female_top_blazer: { url: null },
@@ -78,10 +82,12 @@ export const MODEL_REGISTRY: Partial<Record<ModelRegistryKey, ModelRegistryEntry
   female_bottom_jeans: { url: null },
   female_bottom_shorts: { url: null },
   female_bottom_a_line_skirt: { url: null },
+  female_bottom_mini_skirt: { url: null },
 
-  female_shoes_sneakers: { url: null },
-  female_shoes_loafers: { url: null },
-  female_shoes_boots: { url: null },
+  female_shoes_sneaker: { url: null },
+  female_shoes_loafer: { url: null },
+  female_shoes_heels: { url: null },
+  female_shoes_boot: { url: null },
 };
 
 export function getRegisteredModel(

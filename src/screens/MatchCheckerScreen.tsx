@@ -28,12 +28,12 @@ import {
   getUndertoneShortLabel,
   loadUserUndertone,
   saveUserUndertone,
-  SkinUndertone,
 } from '../services/userPreferences';
 import {
   MatchItemSelection,
   OutfitSlotId,
   SilhouetteStyleType,
+  SkinUndertone,
   StudioPresetOutfit,
 } from '../types/outfit';
 import { RootStackParamList } from '../../App';
@@ -100,11 +100,11 @@ export const MatchCheckerScreen: React.FC = () => {
     }
   );
 
-  // Nạp tông da đã lưu khi mở màn hình
+  // Nạp tông da đã lưu khi mở màn hình (expo-file-system)
   useEffect(() => {
     let mounted = true;
     loadUserUndertone().then(saved => {
-      if (mounted) {
+      if (mounted && saved) {
         setUndertone(saved);
       }
     });
@@ -182,7 +182,7 @@ export const MatchCheckerScreen: React.FC = () => {
       topShape: 'tshirt',
       bottomShape: gender === 'female' ? 'a_line_skirt' : 'wide_pants',
       outerShape: 'blazer',
-      shoesShape: 'sneakers',
+      shoesShape: 'sneaker',
       isLayering,
       gender,
       activeSlot: null,
@@ -298,6 +298,7 @@ export const MatchCheckerScreen: React.FC = () => {
         shoes: resolvedColors.shoes,
       },
       sourceSlot: item1.slot,
+      undertone,
     };
 
     navigation.navigate('OutfitSuggestion', {
@@ -305,7 +306,14 @@ export const MatchCheckerScreen: React.FC = () => {
       baseRole: item1.slot === 'bottom' ? 'bottom' : 'top',
       initialPresetOutfit: preset,
     });
-  }, [gender, isLayering, item1, item2, navigation, resolvedColors]);
+  }, [gender, isLayering, item1, item2, navigation, resolvedColors, undertone]);
+
+  const editingSlotId: OutfitSlotId =
+    editingTarget === 'item1'
+      ? item1.slot
+      : editingTarget === 'item2'
+      ? item2.slot
+      : item1.slot;
 
   const editingColorId =
     editingTarget === 'item1'
@@ -692,10 +700,12 @@ export const MatchCheckerScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* MODAL CHỌN MÀU VẢI CHUẨN ĐỂ THỬ ĐỔI NGAY TẠI CHỖ */}
+      {/* MODAL CHỌN MÀU VẢI CHUẨN ĐỂ THỬ ĐỔI NGAY TẠI CHỖ (KÈM NHÃN TÔN DA) */}
       <ColorPaletteSheet
         visible={editingTarget !== null}
         slotLabel={editingSlotLabel}
+        slotId={editingSlotId}
+        undertone={undertone}
         selectedColorId={editingColorId}
         onSelectColor={handleSelectColorFromSheet}
         onClose={() => setEditingTarget(null)}

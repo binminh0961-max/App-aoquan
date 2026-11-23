@@ -687,8 +687,8 @@ export const OutfitSilhouette: React.FC<Props> = ({
           </G>
         )}
 
-        {/* PHÂN NHÁNH 3 PHOM DÁNG GIÀY */}
-        {silhouette === 'loafers' ? (
+        {/* PHÂN NHÁNH PHOM DÁNG GIÀY */}
+        {silhouette === 'loafer' || silhouette === 'dress_shoes' ? (
           // ================= 1. LOAFER / GIÀY TÂY =================
           // Mũi thuôn thanh lịch, đế mỏng tối màu, đai da ngang mui giày
           <G>
@@ -722,7 +722,7 @@ export const OutfitSilhouette: React.FC<Props> = ({
             <Rect x="166" y="302" width="14" height="4" rx="1" fill="rgba(0,0,0,0.2)" />
             <Line x1="173" y1="302" x2="173" y2="306" stroke={shoesDetailStroke} strokeWidth="1" />
           </G>
-        ) : silhouette === 'boots' ? (
+        ) : silhouette === 'boot' || silhouette === 'heels' ? (
           // ================= 2. BOOT / CAO GÓT =================
           // Nam: Boot da cổ cao ôm mắt cá chân, đế dày gồ ghề
           // Nữ: Boot gót mảnh / Giày cao gót thanh mảnh tôn dáng
@@ -969,7 +969,9 @@ export const OutfitSilhouette: React.FC<Props> = ({
             <View style={[styles.colorDot, { backgroundColor: bottom.color.hex }]} />
             <View style={styles.pinTextCol}>
               <Text style={styles.pinTitle} numberOfLines={1}>
-                {bottom.silhouette === 'a_line_skirt' ? 'Chân váy' : 'Quần'}
+                {bottom.silhouette === 'a_line_skirt' || bottom.silhouette === 'mini_skirt'
+                  ? 'Chân váy'
+                  : 'Quần'}
               </Text>
               <Text style={styles.pinRatioText}>{visualRatios.bottom}%</Text>
             </View>

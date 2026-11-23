@@ -22,11 +22,13 @@ import Outfit3DViewer, {
 } from '../components/Outfit3DViewer';
 import { LookbookItemCard } from '../components/LookbookItemCard';
 import { ColorPaletteSheet } from '../components/ColorPaletteSheet';
+import { SkinUndertoneSheet } from '../components/SkinUndertoneSheet';
 import {
   initStudioOutfit,
   initStudioOutfitFromPreset,
   toggleLayeringMode,
   shuffleOutfitColors,
+  remixOutfitForContext,
   updateSlotSilhouette,
   updateSlotColor,
   toggleSlotLock,
@@ -34,9 +36,9 @@ import {
   switchGender,
   applyScannedColorToSlot,
   generateOutfitAdvice,
-  TOP_SILHOUETTES,
+  getTopSilhouettes,
   OUTERWEAR_SILHOUETTES,
-  BOTTOM_SILHOUETTES,
+  getBottomSilhouettes,
   getShoesSilhouettes,
   hexToHsl,
 } from '../engine/OutfitEngine';
@@ -46,7 +48,10 @@ import {
   StudioOutfitState,
   SilhouetteStyleType,
   StyleHarmonyMode,
+  OccasionMode,
+  SkinUndertone,
 } from '../types/outfit';
+import { loadUserUndertone, saveUserUndertone } from '../services/userPreferences';
 import { FashionColor, FASHION_COLORS } from '../constants/fashionColors';
 import { RootStackParamList } from '../../App';
 
@@ -72,6 +77,23 @@ const HARMONY_MODES: { id: StyleHarmonyMode; label: string }[] = [
   { id: 'analogous', label: 'Thanh lịch' },
   { id: 'complementary', label: 'Nổi bật' },
 ];
+
+const OCCASION_CHIPS: {
+  id: Exclude<OccasionMode, 'all'>;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { id: 'study', label: 'Đi học', icon: 'school-outline' },
+  { id: 'work', label: 'Đi làm', icon: 'briefcase-outline' },
+  { id: 'casual', label: 'Đi chơi', icon: 'cafe-outline' },
+  { id: 'party', label: 'Tiệc tối', icon: 'sparkles-outline' },
+];
+
+const UNDERTONE_PILL_META: Record<SkinUndertone, { label: string; dotHex: string }> = {
+  warm: { label: 'Da ấm', dotHex: '#D9A773' },
+  cool: { label: 'Da lạnh', dotHex: '#E0B9C1' },
+  neutral: { label: 'Trung tính', dotHex: '#D6B196' },
+};
 
 export const InteractiveMixStudio: React.FC = () => {
   const navigation = useNavigation<NavProps>();
@@ -100,6 +122,28 @@ export const InteractiveMixStudio: React.FC = () => {
 
   // Modal bảng chọn đủ 46 màu vải chuẩn
   const [paletteVisible, setPaletteVisible] = useState<boolean>(false);
+
+  // Modal chọn Tông da (Skin Undertone)
+  const [undertoneSheetVisible, setUndertoneSheetVisible] = useState<boolean>(false);
+
+  // Tự động nạp Tông da người dùng đã lưu trên máy (expo-file-system) khi mở Studio
+  useEffect(() => {
+    let cancelled = false;
+    loadUserUndertone().then(saved => {
+      if (cancelled || !saved) return;
+      setStudioState(prev => {
+        if (prev.undertone === saved) return prev;
+        // Nếu mở từ MatchChecker (initialPresetOutfit), giữ nguyên màu preset đã chọn và chỉ cập nhật undertone
+        if (initialPresetOutfit) {
+          return { ...prev, undertone: saved };
+        }
+        return remixOutfitForContext(prev, { undertone: saved }, 'all');
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialPresetOutfit]);
 
   // Toast gọn nhẹ tự ẩn sau 2 giây
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -160,9 +204,20 @@ export const InteractiveMixStudio: React.FC = () => {
     }
   }, []);
 
-  const { slots, isLayering, visualRatios, styleType, sourceSlot, scannedColor } = studioState;
+  const {
+    slots,
+    isLayering,
+    visualRatios,
+    styleType,
+    sourceSlot,
+    scannedColor,
+    occasion,
+    undertone,
+  } = studioState;
 
-  // Lời khuyên Stylist động theo bộ màu hiện tại
+  const undertonePillMeta = UNDERTONE_PILL_META[undertone];
+
+  // Lời khuyên Stylist động theo bộ màu hiện tại + Hoàn cảnh + Tông da
   const advice = useMemo(() => generateOutfitAdvice(studioState), [studioState]);
 
   const getContrastTextColor = useCallback((hex: string) => {
@@ -199,7 +254,10 @@ export const InteractiveMixStudio: React.FC = () => {
 
   const handleShuffle = useCallback(() => {
     const prev = studioStateRef.current;
-    const next = shuffleOutfitColors(prev, harmonyMode);
+    const next = shuffleOutfitColors(prev, harmonyMode, {
+      occasion: prev.occasion,
+      undertone: prev.undertone,
+    });
     if (next === prev) {
       showToast('Tất cả món đang khóa — hãy mở khóa bớt để đổi màu');
       return;
@@ -207,6 +265,41 @@ export const InteractiveMixStudio: React.FC = () => {
     setHistory(h => [...h.slice(-14), prev]);
     setStudioState(next);
   }, [harmonyMode, showToast]);
+
+  // Chuyển Hoàn cảnh (Đi học / Đi làm / Đi chơi / Tiệc tối; bấm lại để tắt về Tự do)
+  // -> ghi Undo, đồng bộ cả PHOM DÁNG theo giới tính lẫn MÀU SẮC các món chưa khóa ngay lập tức!
+  const handleToggleOccasion = useCallback(
+    (target: Exclude<OccasionMode, 'all'>) => {
+      const prev = studioStateRef.current;
+      const nextOccasion: OccasionMode = prev.occasion === target ? 'all' : target;
+      const next = applyStudioChange(cur =>
+        remixOutfitForContext(cur, { occasion: nextOccasion }, harmonyMode)
+      );
+      if (!next.isLayering && activeSlot === 'outerwear') {
+        setActiveSlot('top');
+      }
+      if (nextOccasion === 'all') {
+        showToast('Chế độ Tự do (Mọi hoàn cảnh)');
+      }
+    },
+    [activeSlot, applyStudioChange, harmonyMode, showToast]
+  );
+
+  // Chọn Tông da -> lưu xuống bộ nhớ máy (expo-file-system), đóng sheet, ghi Undo & cập nhật gợi ý ngay
+  const handleSelectUndertone = useCallback(
+    (nextUndertone: SkinUndertone) => {
+      setUndertoneSheetVisible(false);
+      void saveUserUndertone(nextUndertone);
+
+      const prev = studioStateRef.current;
+      if (prev.undertone === nextUndertone) return;
+
+      applyStudioChange(cur =>
+        remixOutfitForContext(cur, { undertone: nextUndertone }, harmonyMode)
+      );
+    },
+    [applyStudioChange, harmonyMode]
+  );
 
   const handleUndo = useCallback(() => {
     setHistory(prevHistory => {
@@ -233,7 +326,10 @@ export const InteractiveMixStudio: React.FC = () => {
   const handleSelectSourceSlot = useCallback(
     (targetSlot: OutfitSlotId) => {
       applyStudioChange(prev =>
-        applyScannedColorToSlot(prev, prev.scannedColor, targetSlot, FASHION_COLORS)
+        applyScannedColorToSlot(prev, prev.scannedColor, targetSlot, FASHION_COLORS, {
+          occasion: prev.occasion,
+          undertone: prev.undertone,
+        })
       );
       setActiveSlot(targetSlot);
     },
@@ -324,7 +420,10 @@ export const InteractiveMixStudio: React.FC = () => {
 
   const activeSlotDisplayLabel = useMemo(() => {
     const item = slots[activeSlot];
-    if (activeSlot === 'bottom' && item.silhouette === 'a_line_skirt') {
+    if (
+      activeSlot === 'bottom' &&
+      (item.silhouette === 'a_line_skirt' || item.silhouette === 'mini_skirt')
+    ) {
       return 'Chân váy';
     }
     if (activeSlot === 'top') {
@@ -333,15 +432,11 @@ export const InteractiveMixStudio: React.FC = () => {
     return item.label;
   }, [slots, activeSlot, isLayering]);
 
-  // Danh sách phom dáng theo món đang chọn & giới tính (Nam ẩn Chân váy chữ A)
+  // Danh sách phom dáng lọc đúng theo món đang chọn & giới tính Nam / Nữ
   const availableSilhouettes = useMemo(() => {
     if (activeSlot === 'outerwear') return OUTERWEAR_SILHOUETTES;
-    if (activeSlot === 'top') return TOP_SILHOUETTES;
-    if (activeSlot === 'bottom') {
-      return styleType === 'male'
-        ? BOTTOM_SILHOUETTES.filter(s => s.id !== 'a_line_skirt')
-        : BOTTOM_SILHOUETTES;
-    }
+    if (activeSlot === 'top') return getTopSilhouettes(styleType);
+    if (activeSlot === 'bottom') return getBottomSilhouettes(styleType);
     return getShoesSilhouettes(styleType);
   }, [activeSlot, styleType]);
 
@@ -550,6 +645,69 @@ export const InteractiveMixStudio: React.FC = () => {
           { paddingBottom: Math.max(insets.bottom, 10) },
         ]}
       >
+        {/* THANH LỌC SIÊU GỌN: HOÀN CẢNH (TRÁI) + TÔNG DA (PHẢI GHIM CỐ ĐỊNH) */}
+        <View style={styles.contextFilterRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.occasionScroll}
+            contentContainerStyle={styles.occasionScrollContent}
+          >
+            {OCCASION_CHIPS.map(chip => {
+              const isSelected = occasion === chip.id;
+              return (
+                <TouchableOpacity
+                  key={chip.id}
+                  style={[
+                    styles.occasionChip,
+                    isSelected && styles.occasionChipActive,
+                  ]}
+                  onPress={() => handleToggleOccasion(chip.id)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Hoàn cảnh ${chip.label}`}
+                >
+                  <Ionicons
+                    name={chip.icon}
+                    size={12}
+                    color={isSelected ? '#FFFFFF' : '#374151'}
+                  />
+                  <Text
+                    style={[
+                      styles.occasionChipText,
+                      isSelected && styles.occasionChipTextActive,
+                    ]}
+                  >
+                    {chip.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          <TouchableOpacity
+            style={[
+              styles.undertonePillBtn,
+              undertone !== 'neutral' && styles.undertonePillBtnSelected,
+            ]}
+            onPress={() => setUndertoneSheetVisible(true)}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={`Chọn tông da, hiện tại ${undertonePillMeta.label}`}
+          >
+            <View
+              style={[
+                styles.undertonePillDot,
+                { backgroundColor: undertonePillMeta.dotHex },
+              ]}
+            />
+            <Text style={styles.undertonePillText} numberOfLines={1}>
+              {undertonePillMeta.label}
+            </Text>
+            <Ionicons name="chevron-down" size={11} color="#4B5563" />
+          </TouchableOpacity>
+        </View>
+
         {/* HÀNG CHỌN MÓN ÁP DỤNG "MÀU GỐC" CHỤP TỪ CAMERA */}
         <View style={styles.sourceSlotRow}>
           <View style={styles.sourceLabelGroup}>
@@ -861,13 +1019,23 @@ export const InteractiveMixStudio: React.FC = () => {
         </View>
       )}
 
-      {/* Modal Bottom Sheet chọn thủ công đủ 46 màu vải chuẩn */}
+      {/* Modal Bottom Sheet chọn thủ công đủ 46 màu vải chuẩn (có đánh dấu màu Tôn da cho Áo / Khoác) */}
       <ColorPaletteSheet
         visible={paletteVisible}
         slotLabel={activeSlotDisplayLabel}
+        slotId={activeSlot}
+        undertone={undertone}
         selectedColorId={slots[activeSlot].color.id}
         onSelectColor={handleSelectColorFromPalette}
         onClose={() => setPaletteVisible(false)}
+      />
+
+      {/* Modal Bottom Sheet chọn Tông da (Warm / Cool / Neutral) */}
+      <SkinUndertoneSheet
+        visible={undertoneSheetVisible}
+        selectedUndertone={undertone}
+        onSelectUndertone={handleSelectUndertone}
+        onClose={() => setUndertoneSheetVisible(false)}
       />
     </View>
   );
@@ -1009,7 +1177,7 @@ const styles = StyleSheet.create({
   },
   stageLeft3D: {
     flex: 0.62,
-    minHeight: 360,
+    minHeight: 340,
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1047,20 +1215,91 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 14,
-    paddingTop: 10,
+    paddingTop: 8,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.1,
     shadowRadius: 10,
     elevation: 10,
   },
+  // THANH LỌC 1 HÀNG SIÊU GỌN: HOÀN CẢNH + TÔNG DA
+  contextFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 32,
+    marginBottom: 6,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  occasionScroll: {
+    flex: 1,
+    marginRight: 8,
+  },
+  occasionScrollContent: {
+    alignItems: 'center',
+    paddingRight: 4,
+  },
+  occasionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 26,
+    paddingHorizontal: 9,
+    borderRadius: 13,
+    backgroundColor: '#F3F4F6',
+    marginRight: 5,
+  },
+  occasionChipActive: {
+    backgroundColor: '#111827',
+  },
+  occasionChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#374151',
+    marginLeft: 4,
+    includeFontPadding: false,
+  },
+  occasionChipTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  undertonePillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 26,
+    paddingHorizontal: 9,
+    borderRadius: 13,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  undertonePillBtnSelected: {
+    borderColor: '#111827',
+    backgroundColor: '#F3F4F6',
+  },
+  undertonePillDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(17, 24, 39, 0.2)',
+  },
+  undertonePillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#111827',
+    marginRight: 3,
+    includeFontPadding: false,
+  },
   // HÀNG CHỌN VỊ TRÍ ÁP DỤNG MÀU GỐC CHỤP TỪ CAMERA
   sourceSlotRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
-    paddingBottom: 8,
+    marginBottom: 6,
+    paddingBottom: 6,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
   },
