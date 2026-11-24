@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dimensions,
   LayoutChangeEvent,
+  Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -41,7 +43,16 @@ import { RootStackParamList } from '../../App';
 type RouteProps = RouteProp<RootStackParamList, 'MatchChecker'>;
 type NavProps = NativeStackNavigationProp<RootStackParamList, 'MatchChecker'>;
 
-const SLOT_CYCLE_ORDER: OutfitSlotId[] = ['top', 'outerwear', 'bottom', 'shoes'];
+const SLOT_PICKER_OPTIONS: {
+  id: OutfitSlotId;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { id: 'top', label: 'Áo', icon: 'shirt-outline' },
+  { id: 'outerwear', label: 'Khoác', icon: 'layers-outline' },
+  { id: 'bottom', label: 'Quần', icon: 'resize-outline' },
+  { id: 'shoes', label: 'Giày', icon: 'footsteps-outline' },
+];
 
 const SLOT_PILL_LABELS: Record<OutfitSlotId, string> = {
   top: 'Áo',
@@ -51,6 +62,19 @@ const SLOT_PILL_LABELS: Record<OutfitSlotId, string> = {
 };
 
 const UNDERTONE_CYCLE: SkinUndertone[] = ['neutral', 'warm', 'cool'];
+
+/** Đảm bảo tuyệt đối item1.slot !== item2.slot trong mọi trường hợp (kể cả khi quay lại từ Hút lại). */
+function ensureDistinctItems(
+  first: MatchItemSelection,
+  second: MatchItemSelection
+): [MatchItemSelection, MatchItemSelection] {
+  if (first.slot !== second.slot) {
+    return [first, second];
+  }
+  const fallbackOrder: OutfitSlotId[] = ['bottom', 'top', 'shoes', 'outerwear'];
+  const nextSlot = fallbackOrder.find(s => s !== first.slot) || 'bottom';
+  return [first, { ...second, slot: nextSlot }];
+}
 
 function getBarColor(score: number): string {
   if (score >= 85) return '#15803D';
@@ -64,37 +88,47 @@ export const MatchCheckerScreen: React.FC = () => {
   const route = useRoute<RouteProps>();
   const insets = useSafeAreaInsets();
 
-  const defaultItem1: MatchItemSelection = route.params?.item1 || {
-    slot: 'top',
-    color: FASHION_COLORS[12], // Xanh Navy Đậm
-  };
-  const defaultItem2: MatchItemSelection = route.params?.item2 || {
-    slot: 'bottom',
-    color: FASHION_COLORS[4], // Be Cát
-  };
+  const [initialItem1, initialItem2] = ensureDistinctItems(
+    route.params?.item1 || {
+      slot: 'top',
+      color: FASHION_COLORS[12], // Xanh Navy Đậm
+    },
+    route.params?.item2 || {
+      slot: 'bottom',
+      color: FASHION_COLORS[4], // Be Cát
+    }
+  );
 
-  const [item1, setItem1] = useState<MatchItemSelection>(defaultItem1);
-  const [item2, setItem2] = useState<MatchItemSelection>(defaultItem2);
+  const [item1, setItem1] = useState<MatchItemSelection>(initialItem1);
+  const [item2, setItem2] = useState<MatchItemSelection>(initialItem2);
   const [gender, setGender] = useState<SilhouetteStyleType>('male');
   const [undertone, setUndertone] = useState<SkinUndertone>(() =>
     getCachedUserUndertone()
   );
-  const [selectedBridgeIndex, setSelectedBridgeIndex] = useState<number>(0);
+  // Mặc định null (chưa chọn màu cầu nối -> hiển thị điểm gốc 2 món)
+  const [selectedBridgeIndex, setSelectedBridgeIndex] = useState<number | null>(
+    null
+  );
 
   // Modal chọn 46 màu vải chuẩn cho Item 1 hoặc Item 2
   const [editingTarget, setEditingTarget] = useState<'item1' | 'item2' | null>(
     null
   );
 
+  // Modal chọn rõ 1 trong 4 vai trò (Áo / Khoác / Quần / Giày), chặn trùng tuyệt đối
+  const [slotPickerTarget, setSlotPickerTarget] = useState<
+    'item1' | 'item2' | null
+  >(null);
+
   // Tạm khóa cuộn dọc của ScrollView khi người dùng đang vuốt xoay mô hình 3D 360°
   const [isRotating3D, setIsRotating3D] = useState<boolean>(false);
 
-  // Kích thước khung sân khấu 3D bên trái Hero Card
+  // Kích thước khung sân khấu 3D bên trái Hero Card (bảo toàn vừa khít biên, cập nhật chính xác qua onLayout)
   const [stageSize, setStageSize] = useState<{ width: number; height: number }>(
     () => {
       const win = Dimensions.get('window');
       return {
-        width: Math.max(150, Math.floor((win.width - 48) * 0.52)),
+        width: Math.max(120, Math.floor((win.width - 52) * 0.5)),
         height: 276,
       };
     }
@@ -113,12 +147,16 @@ export const MatchCheckerScreen: React.FC = () => {
     };
   }, []);
 
-  // Đồng bộ lại state khi quay về từ luồng Hút lại (rescan_item1 / rescan_item2)
+  // Đồng bộ lại state khi quay về từ luồng Hút lại (rescan_item1 / rescan_item2), luôn chặn trùng slot
   useEffect(() => {
     if (route.params?.item1 && route.params?.item2) {
-      setItem1(route.params.item1);
-      setItem2(route.params.item2);
-      setSelectedBridgeIndex(0);
+      const [safe1, safe2] = ensureDistinctItems(
+        route.params.item1,
+        route.params.item2
+      );
+      setItem1(safe1);
+      setItem2(safe2);
+      setSelectedBridgeIndex(null);
     }
   }, [route.params?.item1, route.params?.item2]);
 
@@ -128,20 +166,41 @@ export const MatchCheckerScreen: React.FC = () => {
     [item1, item2, undertone]
   );
 
-  const safeBridgeIndex = Math.min(
-    selectedBridgeIndex,
-    Math.max(0, evaluation.bridgeSuggestions.length - 1)
-  );
-  const activeBridge = evaluation.bridgeSuggestions[safeBridgeIndex];
+  const activeBridge =
+    selectedBridgeIndex !== null
+      ? evaluation.bridgeSuggestions[selectedBridgeIndex] ?? null
+      : null;
+
+  // Điểm số, phân hạng & 3 thanh tiến trình động theo trạng thái có/chưa chọn Màu cầu nối
+  const displayScore = activeBridge
+    ? activeBridge.boostedScore
+    : evaluation.score;
+  const displayGrade = activeBridge ? activeBridge.grade : evaluation.grade;
+  const displayGradeColor = activeBridge
+    ? activeBridge.gradeColor
+    : evaluation.gradeColor;
+  const displayHueScore = activeBridge
+    ? activeBridge.boostedBreakdown.hueScore
+    : evaluation.breakdown.hueScore;
+  const displayContrastScore = activeBridge
+    ? activeBridge.boostedBreakdown.contrastScore
+    : evaluation.breakdown.contrastScore;
+  const displaySaturationScore = activeBridge
+    ? activeBridge.boostedBreakdown.saturationScore
+    : evaluation.breakdown.saturationScore;
 
   const isLayering = item1.slot === 'outerwear' || item2.slot === 'outerwear';
 
-  // Gán đầy đủ màu lên 4 slot của mô hình 3D (2 món đang chấm + màu cầu nối + trung tính bổ trợ nếu layering)
+  // Gán đầy đủ màu lên 4 slot của mô hình 3D:
+  // - Khi chưa chọn màu cầu nối: mặc trung tính nhẹ mặc định cho món còn thiếu để mô hình trọn vẹn
+  // - Khi đã chọn màu cầu nối: áp ngay màu cầu nối đang chọn lên món bridgeSlot
   const resolvedColors = useMemo<Record<OutfitSlotId, FashionColor>>(() => {
-    const fallbackLight =
-      FASHION_COLORS.find(c => c.id === 'wb-1') || FASHION_COLORS[0];
+    const fallbackSoftWhite =
+      FASHION_COLORS.find(c => c.id === 'wb-2') || FASHION_COLORS[0];
+    const fallbackSoftGray =
+      FASHION_COLORS.find(c => c.id === 'gb-6') || FASHION_COLORS[11] || FASHION_COLORS[0];
     const fallbackDark =
-      FASHION_COLORS.find(c => c.id === 'gb-1') || FASHION_COLORS[6];
+      FASHION_COLORS.find(c => c.id === 'gb-3') || FASHION_COLORS[6];
     const fallbackBeige =
       FASHION_COLORS.find(c => c.id === 'wb-5') || FASHION_COLORS[4];
 
@@ -158,11 +217,14 @@ export const MatchCheckerScreen: React.FC = () => {
     const outerIsDark = hexToHsl(outerRef.hex).l < 48;
 
     const topColor =
-      map.top || (isLayering ? (outerIsDark ? fallbackLight : fallbackDark) : fallbackLight);
+      map.top ||
+      (isLayering
+        ? outerIsDark
+          ? fallbackSoftWhite
+          : fallbackDark
+        : fallbackSoftWhite);
     const bottomColor = map.bottom || fallbackBeige;
-    const shoesColor =
-      map.shoes ||
-      (hexToHsl(bottomColor.hex).l < 45 ? fallbackLight : fallbackDark);
+    const shoesColor = map.shoes || fallbackSoftGray;
     const outerColor = map.outerwear || fallbackDark;
 
     return {
@@ -206,34 +268,28 @@ export const MatchCheckerScreen: React.FC = () => {
     }
   }, []);
 
-  // Chuyển vòng vai trò (Áo -> Khoác -> Quần -> Giày); nếu trùng thẻ kia thì tự hoán đổi
-  const handleCycleSlot = useCallback(
-    (which: 'item1' | 'item2') => {
-      const current = which === 'item1' ? item1 : item2;
-      const other = which === 'item1' ? item2 : item1;
+  // Chọn vai trò mới từ Modal 4 mục — CHẶN TUYỆT ĐỐI chọn trùng với món kia, không hoán đổi
+  const handleSelectSlotFromModal = useCallback(
+    (nextSlot: OutfitSlotId) => {
+      if (!slotPickerTarget) return;
 
-      const curIdx = SLOT_CYCLE_ORDER.indexOf(current.slot);
-      const nextSlot = SLOT_CYCLE_ORDER[(curIdx + 1) % SLOT_CYCLE_ORDER.length];
-
-      if (nextSlot === other.slot) {
-        // Tự hoán đổi 2 vai trò cho nhau để không bao giờ bị trùng slot
-        if (which === 'item1') {
-          setItem1({ ...item1, slot: other.slot });
-          setItem2({ ...item2, slot: current.slot });
-        } else {
-          setItem2({ ...item2, slot: other.slot });
-          setItem1({ ...item1, slot: current.slot });
+      if (slotPickerTarget === 'item1') {
+        if (nextSlot === item2.slot) return; // Chặn trùng tuyệt đối
+        if (nextSlot !== item1.slot) {
+          setItem1(prev => ({ ...prev, slot: nextSlot }));
+          setSelectedBridgeIndex(null);
         }
       } else {
-        if (which === 'item1') {
-          setItem1({ ...item1, slot: nextSlot });
-        } else {
-          setItem2({ ...item2, slot: nextSlot });
+        if (nextSlot === item1.slot) return; // Chặn trùng tuyệt đối
+        if (nextSlot !== item2.slot) {
+          setItem2(prev => ({ ...prev, slot: nextSlot }));
+          setSelectedBridgeIndex(null);
         }
       }
-      setSelectedBridgeIndex(0);
+
+      setSlotPickerTarget(null);
     },
-    [item1, item2]
+    [slotPickerTarget, item1.slot, item2.slot]
   );
 
   // Hút lại màu bằng Camera cho Món 1 hoặc Món 2
@@ -255,15 +311,20 @@ export const MatchCheckerScreen: React.FC = () => {
     (color: FashionColor) => {
       if (editingTarget === 'item1') {
         setItem1(prev => ({ ...prev, color }));
-        setSelectedBridgeIndex(0);
+        setSelectedBridgeIndex(null);
       } else if (editingTarget === 'item2') {
         setItem2(prev => ({ ...prev, color }));
-        setSelectedBridgeIndex(0);
+        setSelectedBridgeIndex(null);
       }
       setEditingTarget(null);
     },
     [editingTarget]
   );
+
+  // Chạm thẻ màu cầu nối: chọn hoặc chạm lại để bỏ chọn (so sánh lại với điểm gốc 2 món)
+  const handleToggleBridgeCard = useCallback((idx: number) => {
+    setSelectedBridgeIndex(prev => (prev === idx ? null : idx));
+  }, []);
 
   // Đổi nhanh tông da (lưu vào userPreferences để đồng bộ toàn app)
   const handleCycleUndertone = useCallback(() => {
@@ -285,17 +346,31 @@ export const MatchCheckerScreen: React.FC = () => {
     [item1.slot, item2.slot]
   );
 
-  // Mở trong Studio Tự tay mix đồ với preset khóa sẵn 2 món + áp màu cầu nối vừa chọn
+  // Mở trong Studio Tự tay mix đồ với preset khóa sẵn 2 món + áp màu cầu nối đang chọn (hoặc mặc định gợi ý 1)
   const handleOpenInStudio = useCallback(() => {
+    const studioBridgeColor =
+      activeBridge?.color || evaluation.bridgeSuggestions[0]?.color;
+
+    const studioColors: Record<OutfitSlotId, FashionColor> = {
+      ...resolvedColors,
+    };
+    if (
+      studioBridgeColor &&
+      evaluation.bridgeSlot !== item1.slot &&
+      evaluation.bridgeSlot !== item2.slot
+    ) {
+      studioColors[evaluation.bridgeSlot] = studioBridgeColor;
+    }
+
     const preset: StudioPresetOutfit = {
       isLayering,
       gender,
       lockedSlots: [item1.slot, item2.slot],
       colors: {
-        outerwear: resolvedColors.outerwear,
-        top: resolvedColors.top,
-        bottom: resolvedColors.bottom,
-        shoes: resolvedColors.shoes,
+        outerwear: studioColors.outerwear,
+        top: studioColors.top,
+        bottom: studioColors.bottom,
+        shoes: studioColors.shoes,
       },
       sourceSlot: item1.slot,
       undertone,
@@ -306,7 +381,18 @@ export const MatchCheckerScreen: React.FC = () => {
       baseRole: item1.slot === 'bottom' ? 'bottom' : 'top',
       initialPresetOutfit: preset,
     });
-  }, [gender, isLayering, item1, item2, navigation, resolvedColors, undertone]);
+  }, [
+    activeBridge,
+    evaluation.bridgeSlot,
+    evaluation.bridgeSuggestions,
+    gender,
+    isLayering,
+    item1,
+    item2,
+    navigation,
+    resolvedColors,
+    undertone,
+  ]);
 
   const editingSlotId: OutfitSlotId =
     editingTarget === 'item1'
@@ -365,14 +451,16 @@ export const MatchCheckerScreen: React.FC = () => {
           <Text style={styles.itemOrderLabel}>{orderLabel}</Text>
           <TouchableOpacity
             style={styles.rolePill}
-            onPress={() => handleCycleSlot(which)}
+            onPress={() => setSlotPickerTarget(which)}
             activeOpacity={0.78}
-            accessibilityLabel={`Đổi vai trò ${orderLabel}`}
+            accessibilityLabel={`Chọn loại trang phục cho ${orderLabel}`}
           >
-            <Text style={styles.rolePillText}>{roleLabel}</Text>
+            <Text style={styles.rolePillText} numberOfLines={1}>
+              {roleLabel}
+            </Text>
             <Ionicons
-              name="swap-vertical-outline"
-              size={11}
+              name="chevron-down"
+              size={12}
               color="#111827"
               style={{ marginLeft: 3 }}
             />
@@ -503,20 +591,58 @@ export const MatchCheckerScreen: React.FC = () => {
             />
             <View style={styles.rotateHintPill} pointerEvents="none">
               <Ionicons name="sync-outline" size={10} color="#374151" />
-              <Text style={styles.rotateHintText}>Xoay 360°</Text>
+              <Text style={styles.rotateHintText} numberOfLines={1}>
+                Xoay 360°
+              </Text>
             </View>
           </View>
 
-          {/* Cột phải 48%: Điểm số + Nhận xét + 3 thanh tiêu chí */}
+          {/* Cột phải 48%: Điểm số động + Badge cầu nối + Phân hạng + Tông da + 3 thanh tiêu chí */}
           <View style={styles.heroRightScore}>
-            <View style={styles.scoreTopLine}>
-              <View style={styles.scoreNumberWrap}>
+            <View style={styles.scoreHeaderBlock}>
+              <View style={styles.scoreNumberRow}>
+                <View style={styles.scoreNumberWrap}>
+                  <Text
+                    style={[styles.scoreBigNumber, { color: displayGradeColor }]}
+                    numberOfLines={1}
+                  >
+                    {displayScore}
+                  </Text>
+                  <Text style={styles.scoreOutOf}>/100</Text>
+                </View>
+
+                {activeBridge && activeBridge.delta > 0 && (
+                  <View style={styles.deltaBadge}>
+                    <Text
+                      style={styles.deltaBadgeText}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      +{activeBridge.delta}đ cầu nối
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              <View
+                style={[
+                  styles.gradeBadge,
+                  { backgroundColor: `${displayGradeColor}16` },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.gradeDot,
+                    { backgroundColor: displayGradeColor },
+                  ]}
+                />
                 <Text
-                  style={[styles.scoreBigNumber, { color: evaluation.gradeColor }]}
+                  style={[styles.gradeText, { color: displayGradeColor }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
                 >
-                  {evaluation.score}
+                  {displayGrade}
                 </Text>
-                <Text style={styles.scoreOutOf}>/100</Text>
               </View>
 
               <TouchableOpacity
@@ -525,40 +651,40 @@ export const MatchCheckerScreen: React.FC = () => {
                 activeOpacity={0.75}
                 accessibilityLabel="Đổi tông da"
               >
-                <Text style={styles.undertoneChipText}>
+                <View
+                  style={[
+                    styles.undertoneDot,
+                    {
+                      backgroundColor:
+                        undertone === 'warm'
+                          ? '#D9A773'
+                          : undertone === 'cool'
+                          ? '#E0B9C1'
+                          : '#D6B196',
+                    },
+                  ]}
+                />
+                <Text
+                  style={styles.undertoneChipText}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
                   Da: {getUndertoneShortLabel(undertone)}
                 </Text>
               </TouchableOpacity>
             </View>
 
-            <View
-              style={[
-                styles.gradeBadge,
-                { backgroundColor: `${evaluation.gradeColor}16` },
-              ]}
+            <Text
+              style={styles.headlineText}
+              numberOfLines={activeBridge ? 2 : 3}
             >
-              <View
-                style={[
-                  styles.gradeDot,
-                  { backgroundColor: evaluation.gradeColor },
-                ]}
-              />
-              <Text
-                style={[styles.gradeText, { color: evaluation.gradeColor }]}
-                numberOfLines={1}
-              >
-                {evaluation.grade}
-              </Text>
-            </View>
-
-            <Text style={styles.headlineText} numberOfLines={4}>
               {evaluation.headline}
             </Text>
 
             <View style={styles.metricsGroup}>
-              {renderProgressRow('Sắc độ', evaluation.breakdown.hueScore)}
-              {renderProgressRow('Sáng - tối', evaluation.breakdown.contrastScore)}
-              {renderProgressRow('Độ chói', evaluation.breakdown.saturationScore)}
+              {renderProgressRow('Sắc độ', displayHueScore)}
+              {renderProgressRow('Sáng - tối', displayContrastScore)}
+              {renderProgressRow('Độ chói', displaySaturationScore)}
             </View>
           </View>
         </View>
@@ -580,12 +706,14 @@ export const MatchCheckerScreen: React.FC = () => {
             <Text style={styles.sectionTitle}>
               {getBridgeSectionTitle(evaluation.bridgeSlot)}
             </Text>
-            <Text style={styles.sectionHint}>Chạm thử lên 3D</Text>
+            <Text style={styles.sectionHint}>
+              {activeBridge ? 'Chạm lại để xem gốc' : 'Chạm thử lên 3D'}
+            </Text>
           </View>
 
           <View style={styles.bridgeRow}>
             {evaluation.bridgeSuggestions.map((suggestion, idx) => {
-              const isSelected = idx === safeBridgeIndex;
+              const isSelected = selectedBridgeIndex === idx;
               const bHsl = hexToHsl(suggestion.color.hex);
               const isLightDot = bHsl.l > 84;
               const checkColor = bHsl.l > 64 ? '#111827' : '#FFFFFF';
@@ -597,7 +725,7 @@ export const MatchCheckerScreen: React.FC = () => {
                     styles.bridgeCard,
                     isSelected && styles.bridgeCardSelected,
                   ]}
-                  onPress={() => setSelectedBridgeIndex(idx)}
+                  onPress={() => handleToggleBridgeCard(idx)}
                   activeOpacity={0.8}
                 >
                   <View
@@ -637,8 +765,9 @@ export const MatchCheckerScreen: React.FC = () => {
                         styles.boostPillText,
                         isSelected && styles.boostPillTextSelected,
                       ]}
+                      numberOfLines={1}
                     >
-                      → {suggestion.boostedScore}đ
+                      +{suggestion.delta}đ → {suggestion.boostedScore}đ
                     </Text>
                   </View>
                 </TouchableOpacity>
@@ -646,7 +775,7 @@ export const MatchCheckerScreen: React.FC = () => {
             })}
           </View>
 
-          {activeBridge && (
+          {activeBridge ? (
             <View style={styles.bridgeReasonBox}>
               <Ionicons
                 name="sparkles-outline"
@@ -657,6 +786,18 @@ export const MatchCheckerScreen: React.FC = () => {
               <Text style={styles.bridgeReasonText}>
                 <Text style={styles.bridgeReasonTag}>{activeBridge.tag}: </Text>
                 {activeBridge.reason}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.bridgeIdleHintBox}>
+              <Ionicons
+                name="information-circle-outline"
+                size={14}
+                color="#6B7280"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.bridgeIdleHintText}>
+                Chạm chọn 1 màu cầu nối để xem điểm tổng & thử ngay lên 3D.
               </Text>
             </View>
           )}
@@ -710,6 +851,107 @@ export const MatchCheckerScreen: React.FC = () => {
         onSelectColor={handleSelectColorFromSheet}
         onClose={() => setEditingTarget(null)}
       />
+
+      {/* MODAL CHỌN 1 TRONG 4 LOẠI TRANG PHỤC (CHẶN TRÙNG TUYỆT ĐỐI VỚI MÓN KIA) */}
+      <Modal
+        visible={slotPickerTarget !== null}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setSlotPickerTarget(null)}
+      >
+        <View style={styles.slotModalOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSlotPickerTarget(null)}
+          />
+          <View style={styles.slotModalCard}>
+            <View style={styles.slotModalHeader}>
+              <Text style={styles.slotModalTitle} numberOfLines={1}>
+                {slotPickerTarget === 'item1'
+                  ? 'Chọn loại trang phục cho Món 1'
+                  : 'Chọn loại trang phục cho Món 2'}
+              </Text>
+              <TouchableOpacity
+                style={styles.slotModalCloseBtn}
+                onPress={() => setSlotPickerTarget(null)}
+                activeOpacity={0.75}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Đóng chọn loại trang phục"
+              >
+                <Ionicons name="close" size={18} color="#111827" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.slotOptionsList}>
+              {SLOT_PICKER_OPTIONS.map(option => {
+                const currentSlot =
+                  slotPickerTarget === 'item1' ? item1.slot : item2.slot;
+                const otherSlot =
+                  slotPickerTarget === 'item1' ? item2.slot : item1.slot;
+                const otherItemLabel =
+                  slotPickerTarget === 'item1' ? 'Món 2' : 'Món 1';
+
+                const isCurrent = option.id === currentSlot;
+                const isUsedByOther = option.id === otherSlot;
+
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    style={[
+                      styles.slotOptionRow,
+                      isCurrent && styles.slotOptionRowCurrent,
+                      isUsedByOther && styles.slotOptionRowDisabled,
+                    ]}
+                    disabled={isUsedByOther}
+                    onPress={() => handleSelectSlotFromModal(option.id)}
+                    activeOpacity={0.78}
+                  >
+                    <View style={styles.slotOptionLeft}>
+                      <View
+                        style={[
+                          styles.slotOptionIconBox,
+                          isCurrent && styles.slotOptionIconBoxCurrent,
+                        ]}
+                      >
+                        <Ionicons
+                          name={option.icon}
+                          size={17}
+                          color={isCurrent ? '#FFFFFF' : '#111827'}
+                        />
+                      </View>
+                      <Text
+                        style={[
+                          styles.slotOptionLabel,
+                          isCurrent && styles.slotOptionLabelCurrent,
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                    </View>
+
+                    {isCurrent && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={20}
+                        color="#111827"
+                      />
+                    )}
+
+                    {isUsedByOther && (
+                      <View style={styles.slotUsedTag}>
+                        <Text style={styles.slotUsedTagText} numberOfLines={1}>
+                          Đang dùng ở {otherItemLabel}
+                        </Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -789,6 +1031,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderWidth: 1,
     borderColor: '#E5E7EB',
+    overflow: 'hidden',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.06,
@@ -797,6 +1040,7 @@ const styles = StyleSheet.create({
   },
   heroLeft3D: {
     flex: 0.52,
+    minWidth: 0,
     height: 276,
     borderRadius: 16,
     backgroundColor: '#CECECA',
@@ -808,9 +1052,10 @@ const styles = StyleSheet.create({
   rotateHintPill: {
     position: 'absolute',
     bottom: 6,
+    maxWidth: '88%',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.76)',
+    backgroundColor: 'rgba(255, 255, 255, 0.78)',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 10,
@@ -820,27 +1065,38 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#374151',
     marginLeft: 3,
+    flexShrink: 1,
   },
   heroRightScore: {
     flex: 0.48,
+    minWidth: 0,
+    flexShrink: 1,
     paddingLeft: 12,
     paddingVertical: 4,
     justifyContent: 'space-between',
   },
-  scoreTopLine: {
-    flexDirection: 'row',
+  scoreHeaderBlock: {
+    minWidth: 0,
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    gap: 5,
+  },
+  scoreNumberRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: '100%',
   },
   scoreNumberWrap: {
     flexDirection: 'row',
     alignItems: 'baseline',
+    maxWidth: '100%',
   },
   scoreBigNumber: {
-    fontSize: 40,
+    fontSize: 36,
     fontWeight: '900',
-    lineHeight: 44,
-    letterSpacing: -1.2,
+    lineHeight: 40,
+    letterSpacing: -1.1,
     fontVariant: ['tabular-nums'],
   },
   scoreOutOf: {
@@ -849,28 +1105,58 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     marginLeft: 2,
   },
+  deltaBadge: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: 6,
+    paddingVertical: 2.5,
+    borderRadius: 8,
+    maxWidth: '100%',
+    flexShrink: 1,
+  },
+  deltaBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#15803D',
+    fontVariant: ['tabular-nums'],
+    includeFontPadding: false,
+  },
   undertoneChip: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#F3F4F6',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 9,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    marginTop: 4,
+  },
+  undertoneDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    marginRight: 5,
+    borderWidth: 0.8,
+    borderColor: 'rgba(17, 24, 39, 0.16)',
   },
   undertoneChipText: {
-    fontSize: 9.5,
+    fontSize: 10.5,
     fontWeight: '700',
-    color: '#4B5563',
+    color: '#374151',
+    flexShrink: 1,
+    includeFontPadding: false,
   },
   gradeBadge: {
     alignSelf: 'flex-start',
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: 10,
-    marginTop: 2,
   },
   gradeDot: {
     width: 6,
@@ -881,16 +1167,19 @@ const styles = StyleSheet.create({
   gradeText: {
     fontSize: 11.5,
     fontWeight: '800',
+    flexShrink: 1,
   },
   headlineText: {
     fontSize: 11.5,
-    lineHeight: 16,
+    lineHeight: 15.5,
     fontWeight: '500',
     color: '#374151',
-    marginVertical: 6,
+    marginVertical: 4,
+    flexShrink: 1,
   },
   metricsGroup: {
-    gap: 7,
+    minWidth: 0,
+    gap: 6,
   },
   metricRow: {
     gap: 3,
@@ -1117,21 +1406,38 @@ const styles = StyleSheet.create({
   boostPill: {
     marginTop: 6,
     backgroundColor: '#ECFDF5',
-    paddingHorizontal: 7,
+    paddingHorizontal: 6,
     paddingVertical: 2.5,
     borderRadius: 8,
+    maxWidth: '100%',
   },
   boostPillSelected: {
     backgroundColor: '#111827',
   },
   boostPillText: {
-    fontSize: 10.5,
+    fontSize: 9.5,
     fontWeight: '800',
     color: '#15803D',
     fontVariant: ['tabular-nums'],
   },
   boostPillTextSelected: {
     color: '#FFFFFF',
+  },
+  bridgeIdleHintBox: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  bridgeIdleHintText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15.5,
+    color: '#6B7280',
+    fontWeight: '500',
   },
   bridgeReasonBox: {
     marginTop: 10,
@@ -1209,6 +1515,112 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
     fontWeight: '800',
     letterSpacing: 0.2,
+  },
+
+  // SLOT PICKER MODAL (CHỌN 1 TRONG 4 LOẠI TRANG PHỤC)
+  slotModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(17, 24, 39, 0.44)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+  },
+  slotModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 14,
+  },
+  slotModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  slotModalTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
+    marginRight: 10,
+  },
+  slotModalCloseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  slotOptionsList: {
+    gap: 8,
+  },
+  slotOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+  },
+  slotOptionRowCurrent: {
+    borderColor: '#111827',
+    backgroundColor: '#F9FAFB',
+  },
+  slotOptionRowDisabled: {
+    opacity: 0.42,
+    backgroundColor: '#F3F4F6',
+    borderColor: '#E5E7EB',
+  },
+  slotOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
+  },
+  slotOptionIconBox: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  slotOptionIconBoxCurrent: {
+    backgroundColor: '#111827',
+  },
+  slotOptionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  slotOptionLabelCurrent: {
+    fontWeight: '800',
+  },
+  slotUsedTag: {
+    backgroundColor: '#E5E7EB',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    flexShrink: 1,
+  },
+  slotUsedTagText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#4B5563',
   },
 });
 

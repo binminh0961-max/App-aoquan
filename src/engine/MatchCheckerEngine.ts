@@ -80,12 +80,22 @@ export interface MatchScoreBreakdown {
   saturationWarning?: string;
 }
 
+export interface BridgeBoostedBreakdown {
+  hueScore: number;
+  contrastScore: number;
+  saturationScore: number;
+}
+
 export interface BridgeColorSuggestion {
   color: FabricColor;
   tag: string;
   shortTag: string;
   reason: string;
   boostedScore: number;
+  delta: number;
+  grade: string;
+  gradeColor: string;
+  boostedBreakdown: BridgeBoostedBreakdown;
 }
 
 export interface MatchEvaluationResult {
@@ -342,7 +352,7 @@ export function determineBridgeSlot(slot1: OutfitSlot, slot2: OutfitSlot): Outfi
   return 'shoes';
 }
 
-function getGradeMeta(score: number): { grade: string; gradeColor: string } {
+export function getGradeFromScore(score: number): { grade: string; gradeColor: string } {
   if (score >= 88) {
     return { grade: 'Phối cực chuẩn', gradeColor: '#15803D' };
   }
@@ -359,7 +369,12 @@ function getGradeMeta(score: number): { grade: string; gradeColor: string } {
 // 3. TÍNH ĐIỂM BỘ 3 MÓN (BOOSTED SCORE) & CHỌN TOP 3 MÀU CẦU NỐI
 // =============================================================
 
-function computeThreeItemScore(
+interface ThreeItemEval {
+  score: number;
+  breakdown: BridgeBoostedBreakdown;
+}
+
+function computeThreeItemEval(
   m1: ColorMeta,
   m2: ColorMeta,
   bridge: ColorMeta,
@@ -368,7 +383,7 @@ function computeThreeItemScore(
   bridgeSlot: OutfitSlot,
   undertone: SkinUndertone,
   baseUndertoneScore: number
-): number {
+): ThreeItemEval {
   const p1 = scoreColorPair(m1, bridge);
   const p2 = scoreColorPair(m2, bridge);
 
@@ -376,26 +391,59 @@ function computeThreeItemScore(
   const bridgeContrastAvg = (p1.contrastScore + p2.contrastScore) * 0.5;
   const bridgeSatAvg = (p1.saturationScore + p2.saturationScore) * 0.5;
 
-  // Hiệu quả bù trừ thực tế của màu cầu nối lên toàn bộ set 3 món:
-  // 1) Hạ nhiệt nếu 2 món gốc đang chói ngang nhau
-  let calmingBonus = 0;
+  // Hiệu quả bù trừ thực tế của màu cầu nối lên từng tiêu chí của set 3 món:
+  // 1) Hạ nhiệt nếu 2 món gốc đang chói ngang nhau hoặc lệch sắc độ
+  let hueRescue = 0;
+  let satRescue = 0;
   if (basePair.hasSaturationClash && (bridge.neutral || bridge.hsl.s <= 30)) {
-    calmingBonus = 9;
-  } else if (basePair.huePattern === 'clash' && bridge.neutral) {
-    calmingBonus = 8;
+    satRescue = 16;
+    hueRescue = 7;
+  } else if (basePair.hasSaturationClash && bridge.hsl.l <= 42) {
+    satRescue = 11;
+    hueRescue = 5;
+  }
+  if (basePair.huePattern === 'clash' && bridge.neutral) {
+    hueRescue = Math.max(hueRescue, 13);
+  } else if (basePair.huePattern === 'clash' && bridge.hsl.s <= 38) {
+    hueRescue = Math.max(hueRescue, 9);
   }
 
   // 2) Tách độ sáng nếu 2 món gốc đang bị phẳng sáng-tối
   const avgL = (m1.hsl.l + m2.hsl.l) * 0.5;
   const bridgeLightSpread = Math.abs(bridge.hsl.l - avgL);
-  let lightBalanceBonus = 0;
+  let contrastRescue = 0;
   if (basePair.contrastPattern === 'flat' && bridgeLightSpread >= 24) {
-    lightBalanceBonus = 7;
-  } else if (bridgeLightSpread >= 18) {
-    lightBalanceBonus = 3;
+    contrastRescue = 15;
+  } else if (basePair.contrastPattern === 'flat' && bridgeLightSpread >= 14) {
+    contrastRescue = 9;
+  } else if (bridgeLightSpread >= 22) {
+    contrastRescue = 5;
+  } else if (bridgeLightSpread >= 14) {
+    contrastRescue = 3;
   }
 
-  // 3) Nếu món cầu nối nằm sát mặt (top/outerwear), cộng hưởng điểm tông da
+  // 3) Tính từng chỉ số sau khi ghép màu cầu nối (phản ánh trực tiếp lên 3 thanh tiến trình)
+  const boostedHue = clamp(
+    Math.round(basePair.hueScore * 0.56 + bridgeHueAvg * 0.44 + hueRescue),
+    basePair.hueScore,
+    99
+  );
+  const boostedContrast = clamp(
+    Math.round(
+      basePair.contrastScore * 0.56 + bridgeContrastAvg * 0.44 + contrastRescue
+    ),
+    basePair.contrastScore,
+    99
+  );
+  const boostedSat = clamp(
+    Math.round(
+      basePair.saturationScore * 0.54 + bridgeSatAvg * 0.46 + satRescue
+    ),
+    basePair.saturationScore,
+    99
+  );
+
+  // 4) Nếu món cầu nối nằm sát mặt (top/outerwear), cộng hưởng điểm tông da
   const effectiveUndertone =
     bridgeSlot === 'top' || bridgeSlot === 'outerwear'
       ? Math.round(
@@ -404,18 +452,26 @@ function computeThreeItemScore(
         )
       : baseUndertoneScore;
 
-  const bridgeComposite =
-    bridgeHueAvg * 0.4 +
-    bridgeContrastAvg * 0.25 +
-    bridgeSatAvg * 0.2 +
-    effectiveUndertone * 0.15;
-
-  // Tổng hợp bộ 3 món: giữ 58% nền cặp 2 món gốc + 42% độ liên kết của món cầu nối + bonus giải cứu
-  const combined = Math.round(
-    baseScore * 0.58 + bridgeComposite * 0.42 + calmingBonus + lightBalanceBonus
+  // Tổng hợp điểm 3 món nhất quán theo đúng 4 trọng số (40/25/20/15)
+  const rawCombined = Math.round(
+    boostedHue * 0.4 +
+      boostedContrast * 0.25 +
+      boostedSat * 0.2 +
+      effectiveUndertone * 0.15
   );
 
-  return clamp(combined, 50, 99);
+  // Luôn đảm bảo màu cầu nối nâng điểm thực tế (> baseScore, trần 99)
+  const minScore = baseScore >= 99 ? 99 : Math.min(99, baseScore + 1);
+  const score = clamp(Math.max(rawCombined, minScore), minScore, 99);
+
+  return {
+    score,
+    breakdown: {
+      hueScore: boostedHue,
+      contrastScore: boostedContrast,
+      saturationScore: boostedSat,
+    },
+  };
 }
 
 const ACCENT_CANDIDATE_IDS = new Set([
@@ -466,7 +522,7 @@ function selectBridgeSuggestions(
   const safePool = allMetas.filter(c => c.neutral);
   const scoredSafe = safePool
     .map(cand => {
-      const boosted = computeThreeItemScore(
+      const eval3 = computeThreeItemEval(
         m1,
         m2,
         cand,
@@ -476,7 +532,7 @@ function selectBridgeSuggestions(
         undertone,
         baseUndertoneScore
       );
-      let fit = boosted;
+      let fit = eval3.score;
       if (bothDark) {
         // 2 món tối -> ưu tiên Trắng Tinh / Trắng Kem / Trắng Sữa
         fit += cand.hsl.l >= 85 ? 18 : cand.hsl.l >= 65 ? 8 : -12;
@@ -500,13 +556,22 @@ function selectBridgeSuggestions(
         // Tạo độ tách sáng rõ so với trung bình
         fit += Math.min(8, Math.abs(cand.hsl.l - avgL) * 0.18);
       }
-      return { cand, boosted, fit };
+      return { cand, eval3, fit };
     })
     .sort((a, b) => b.fit - a.fit);
 
   const pick1 = scoredSafe[0] || {
     cand: allMetas[0],
-    boosted: clamp(baseScore + 4, 65, 96),
+    eval3: computeThreeItemEval(
+      m1,
+      m2,
+      allMetas[0],
+      baseScore,
+      basePair,
+      bridgeSlot,
+      undertone,
+      baseUndertoneScore
+    ),
     fit: 0,
   };
   const usedIds = new Set<string>([pick1.cand.color.id]);
@@ -522,7 +587,7 @@ function selectBridgeSuggestions(
   );
   const scoredCalm = (calmPool.length > 0 ? calmPool : allMetas.filter(c => !usedIds.has(c.color.id)))
     .map(cand => {
-      const boosted = computeThreeItemScore(
+      const eval3 = computeThreeItemEval(
         m1,
         m2,
         cand,
@@ -532,7 +597,7 @@ function selectBridgeSuggestions(
         undertone,
         baseUndertoneScore
       );
-      let fit = boosted;
+      let fit = eval3.score;
       // Đặc biệt ưu tiên trung tính trầm / nâu cà phê / xám chì khi 2 món đang chói
       if (basePair.hasSaturationClash) {
         fit += cand.neutral && cand.hsl.l <= 42 ? 16 : cand.hsl.s <= 28 ? 10 : 0;
@@ -552,13 +617,23 @@ function selectBridgeSuggestions(
       if (Math.abs(cand.hsl.l - pick1.cand.hsl.l) >= 18) {
         fit += 6;
       }
-      return { cand, boosted, fit };
+      return { cand, eval3, fit };
     })
     .sort((a, b) => b.fit - a.fit);
 
+  const fallbackCalmCand = allMetas.find(c => !usedIds.has(c.color.id)) || allMetas[1];
   const pick2 = scoredCalm[0] || {
-    cand: allMetas.find(c => !usedIds.has(c.color.id)) || allMetas[1],
-    boosted: clamp(baseScore + 3, 64, 95),
+    cand: fallbackCalmCand,
+    eval3: computeThreeItemEval(
+      m1,
+      m2,
+      fallbackCalmCand,
+      baseScore,
+      basePair,
+      bridgeSlot,
+      undertone,
+      baseUndertoneScore
+    ),
     fit: 0,
   };
   usedIds.add(pick2.cand.color.id);
@@ -571,7 +646,7 @@ function selectBridgeSuggestions(
     accentPool.length > 0 ? accentPool : allMetas.filter(c => !usedIds.has(c.color.id))
   )
     .map(cand => {
-      const boosted = computeThreeItemScore(
+      const eval3 = computeThreeItemEval(
         m1,
         m2,
         cand,
@@ -581,7 +656,7 @@ function selectBridgeSuggestions(
         undertone,
         baseUndertoneScore
       );
-      let fit = boosted;
+      let fit = eval3.score;
       if (ACCENT_CANDIDATE_IDS.has(cand.color.id)) {
         fit += 12;
       }
@@ -592,7 +667,7 @@ function selectBridgeSuggestions(
         fit += 7;
       }
       // Ưu tiên điểm nhấn thực sự giữ hoặc nâng điểm tổng thể của bộ 3 món
-      if (boosted >= baseScore) {
+      if (eval3.score >= baseScore) {
         fit += 8;
       }
       // Nếu 2 món gốc đã có màu chói -> chọn điểm nhấn trầm sang (Đỏ Đô, Navy, Nâu Bò/Camel)
@@ -603,15 +678,92 @@ function selectBridgeSuggestions(
       if (m1.neutral && m2.neutral && !cand.neutral) {
         fit += 10;
       }
-      return { cand, boosted, fit };
+      return { cand, eval3, fit };
     })
     .sort((a, b) => b.fit - a.fit);
 
+  const fallbackAccentCand = allMetas.find(c => !usedIds.has(c.color.id)) || allMetas[2];
   const pick3 = scoredAccent[0] || {
-    cand: allMetas.find(c => !usedIds.has(c.color.id)) || allMetas[2],
-    boosted: clamp(baseScore + 2, 62, 94),
+    cand: fallbackAccentCand,
+    eval3: computeThreeItemEval(
+      m1,
+      m2,
+      fallbackAccentCand,
+      baseScore,
+      basePair,
+      bridgeSlot,
+      undertone,
+      baseUndertoneScore
+    ),
     fit: 0,
   };
+
+  // Phân biệt rõ mức cộng điểm giữa 3 phương án theo đúng đặc tính giải cứu thực tế
+  const maxCeiling = 99;
+  const minBoosted = baseScore >= maxCeiling ? maxCeiling : Math.min(maxCeiling, baseScore + 1);
+  const headroom = maxCeiling - baseScore;
+
+  // Hiệu chỉnh nhẹ phân tầng khi có đủ biên độ để người dùng thấy rõ độ chênh giữa 3 lựa chọn
+  let s1 = pick1.eval3.score;
+  let s2 = pick2.eval3.score;
+  let s3 = pick3.eval3.score;
+
+  // Khi cặp 2 món gốc là trung tính cả hai, điểm nhấn 10% (pick3) thường tạo bứt phá thẩm mỹ tốt hơn
+  const bothNeutral = m1.neutral && m2.neutral;
+
+  if (headroom >= 3) {
+    if (bothNeutral) {
+      // Nâng tầm điểm nhấn 10% tỏa sáng nhất -> kế đến Sạch mắt / Trầm gọn
+      const topTarget = clamp(Math.max(s1, s2, s3), baseScore + 3, maxCeiling);
+      s3 = topTarget;
+      s1 = clamp(Math.min(s1, s3 - 1), baseScore + 2, s3 - 1);
+      s2 = clamp(Math.min(s2, s1 - 1), baseScore + 1, s1 - 1);
+    } else {
+      // Cặp có màu sắc/chói: Phương án 1 (An toàn • Sạch mắt) dẫn đầu -> Phương án 2 (Trầm gọn) -> Phương án 3 (Điểm nhấn)
+      const topTarget = clamp(Math.max(s1, s2, s3), baseScore + 3, maxCeiling);
+      s1 = topTarget;
+      const desiredGap12 = headroom >= 6 ? 2 : 1;
+      const desiredGap23 = headroom >= 8 ? 2 : 1;
+      s2 = clamp(Math.min(s2, s1 - desiredGap12), baseScore + 2, s1 - 1);
+      s3 = clamp(Math.min(s3, s2 - desiredGap23), baseScore + 1, s2 - 1);
+    }
+  } else if (headroom === 2) {
+    if (bothNeutral) {
+      s3 = maxCeiling;
+      s1 = baseScore + 1;
+      s2 = baseScore + 1;
+    } else {
+      s1 = maxCeiling;
+      s2 = baseScore + 1;
+      s3 = baseScore + 1;
+    }
+  } else {
+    s1 = minBoosted;
+    s2 = minBoosted;
+    s3 = minBoosted;
+  }
+
+  const adjustBreakdown = (
+    raw: BridgeBoostedBreakdown,
+    rawScore: number,
+    finalScore: number
+  ): BridgeBoostedBreakdown => {
+    const shift = finalScore - rawScore;
+    if (shift === 0) return raw;
+    return {
+      hueScore: clamp(raw.hueScore + shift, basePair.hueScore, 99),
+      contrastScore: clamp(raw.contrastScore + shift, basePair.contrastScore, 99),
+      saturationScore: clamp(raw.saturationScore + shift, basePair.saturationScore, 99),
+    };
+  };
+
+  const b1 = adjustBreakdown(pick1.eval3.breakdown, pick1.eval3.score, s1);
+  const b2 = adjustBreakdown(pick2.eval3.breakdown, pick2.eval3.score, s2);
+  const b3 = adjustBreakdown(pick3.eval3.breakdown, pick3.eval3.score, s3);
+
+  const g1 = getGradeFromScore(s1);
+  const g2 = getGradeFromScore(s2);
+  const g3 = getGradeFromScore(s3);
 
   // Diễn giải tự nhiên lý do chọn từng màu cầu nối
   const reason1 = bothDark
@@ -625,7 +777,7 @@ function selectBridgeSuggestions(
     : `Sắc ${pick2.cand.name} trầm gọn, dễ phối hằng ngày và giữ nhịp chuyển tông tự nhiên cho cả bộ đồ.`;
 
   const reason3 =
-    m1.neutral && m2.neutral
+    bothNeutral
       ? `Nền trung tính sạch sẽ giúp ${slotNoun} ${pick3.cand.name} trở thành điểm nhấn 10% tinh tế, đắt giá.`
       : `Sắc ${pick3.cand.name} đồng điệu sắc độ tổng thể, nâng tầm gu ăn mặc mà không gây rối mắt.`;
 
@@ -635,21 +787,33 @@ function selectBridgeSuggestions(
       tag: 'An toàn • Sạch mắt',
       shortTag: 'Sạch mắt',
       reason: reason1,
-      boostedScore: pick1.boosted,
+      boostedScore: s1,
+      delta: Math.max(0, s1 - baseScore),
+      grade: g1.grade,
+      gradeColor: g1.gradeColor,
+      boostedBreakdown: b1,
     },
     {
       color: pick2.cand.color,
       tag: 'Trầm gọn • Dễ phối',
       shortTag: 'Trầm gọn',
       reason: reason2,
-      boostedScore: pick2.boosted,
+      boostedScore: s2,
+      delta: Math.max(0, s2 - baseScore),
+      grade: g2.grade,
+      gradeColor: g2.gradeColor,
+      boostedBreakdown: b2,
     },
     {
       color: pick3.cand.color,
       tag: 'Nâng tầm • Điểm nhấn',
       shortTag: 'Điểm nhấn',
       reason: reason3,
-      boostedScore: pick3.boosted,
+      boostedScore: s3,
+      delta: Math.max(0, s3 - baseScore),
+      grade: g3.grade,
+      gradeColor: g3.gradeColor,
+      boostedBreakdown: b3,
     },
   ];
 }
@@ -815,7 +979,7 @@ export function evaluateTwoItemMatch(
     100
   );
 
-  const { grade, gradeColor } = getGradeMeta(totalScore);
+  const { grade, gradeColor } = getGradeFromScore(totalScore);
   const bridgeSlot = determineBridgeSlot(item1.slot, item2.slot);
 
   const { headline, details } = buildEditorialFeedback(

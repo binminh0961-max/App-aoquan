@@ -278,7 +278,7 @@ export const ImagePickerScreen: React.FC = () => {
           ? `Món 2 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
           : 'Đang cập nhật Món 1',
         guideText: `Di ngón tay chọn màu Món 1 (${SLOT_SHORT_LABELS[targetSlot]}) trên ảnh`,
-        ctaLabel: 'Cập nhật & Chấm điểm →',
+        ctaLabel: 'Cập nhật',
       };
     }
 
@@ -292,7 +292,7 @@ export const ImagePickerScreen: React.FC = () => {
           ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
           : 'Đang cập nhật Món 2',
         guideText: `Di ngón tay chọn màu Món 2 (${SLOT_SHORT_LABELS[targetSlot]}) trên ảnh`,
-        ctaLabel: 'Cập nhật & Chấm điểm →',
+        ctaLabel: 'Cập nhật',
       };
     }
 
@@ -305,7 +305,7 @@ export const ImagePickerScreen: React.FC = () => {
         ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
         : 'Đã chọn Món 1',
       guideText: `Chấm vùng vải Món 2 (${SLOT_SHORT_LABELS[nextSlot]}), đổi ảnh hoặc mở Camera`,
-      ctaLabel: 'Chấm điểm 2 món này →',
+      ctaLabel: 'Chấm điểm',
     };
   }, [compareContext]);
 

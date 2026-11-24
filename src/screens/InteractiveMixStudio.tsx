@@ -669,7 +669,7 @@ export const InteractiveMixStudio: React.FC = () => {
                 >
                   <Ionicons
                     name={chip.icon}
-                    size={12}
+                    size={11}
                     color={isSelected ? '#FFFFFF' : '#374151'}
                   />
                   <Text
@@ -677,6 +677,7 @@ export const InteractiveMixStudio: React.FC = () => {
                       styles.occasionChipText,
                       isSelected && styles.occasionChipTextActive,
                     ]}
+                    numberOfLines={1}
                   >
                     {chip.label}
                   </Text>
@@ -1235,29 +1236,31 @@ const styles = StyleSheet.create({
   },
   occasionScroll: {
     flex: 1,
-    marginRight: 8,
+    minWidth: 0,
+    marginRight: 6,
   },
   occasionScrollContent: {
     alignItems: 'center',
-    paddingRight: 4,
+    paddingRight: 6,
   },
   occasionChip: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
     height: 26,
-    paddingHorizontal: 9,
+    paddingHorizontal: 7.5,
     borderRadius: 13,
     backgroundColor: '#F3F4F6',
-    marginRight: 5,
+    marginRight: 4,
   },
   occasionChipActive: {
     backgroundColor: '#111827',
   },
   occasionChipText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '600',
     color: '#374151',
-    marginLeft: 4,
+    marginLeft: 3.5,
     includeFontPadding: false,
   },
   occasionChipTextActive: {
@@ -1267,8 +1270,9 @@ const styles = StyleSheet.create({
   undertonePillBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
     height: 26,
-    paddingHorizontal: 9,
+    paddingHorizontal: 8,
     borderRadius: 13,
     backgroundColor: '#F9FAFB',
     borderWidth: 1,
@@ -1279,18 +1283,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6',
   },
   undertonePillDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 5,
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    marginRight: 4,
     borderWidth: 1,
     borderColor: 'rgba(17, 24, 39, 0.2)',
   },
   undertonePillText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '700',
     color: '#111827',
-    marginRight: 3,
+    marginRight: 2.5,
     includeFontPadding: false,
   },
   // HÀNG CHỌN VỊ TRÍ ÁP DỤNG MÀU GỐC CHỤP TỪ CAMERA

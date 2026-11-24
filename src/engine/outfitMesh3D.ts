@@ -37,6 +37,7 @@ export type MeshMaterialKind =
 export type MeshPartId =
   | 'mannequinCore'
   | 'bottomCore'
+  | 'pelvis'
   | 'neckCavity'
   | 'torsoCore'
   | 'outerwearShell'
@@ -873,14 +874,6 @@ class SmoothQuadBuilder {
       : [...innerMesh.grid[topIdx], innerMesh.grid[topIdx][0]];
     this.bridgeEdgeStrip(outerTop, innerTop, 0, 1, 0, partId, zBias + 0.002, outerMat, slot, 0.95);
 
-    const outerBot = openFront
-      ? outerMesh.grid[0]
-      : [...outerMesh.grid[0], outerMesh.grid[0][0]];
-    const innerBot = openFront
-      ? innerMesh.grid[0]
-      : [...innerMesh.grid[0], innerMesh.grid[0][0]];
-    this.bridgeEdgeStrip(outerBot, innerBot, 0, -1, 0, partId, zBias - 0.003, outerMat, slot, 0.85);
-
     if (openFront) {
       const lastCol = outerMesh.grid[0].length - 1;
       this.bridgeEdgeStrip(
@@ -928,15 +921,13 @@ class SmoothQuadBuilder {
     const rxMax = topR * 0.82;
     const rzMax = topR * 0.84;
     const jointRings: RingDef[] = [
-      { y: shoulderY - topR * 1.15, rx: rxMax * 0.42, rz: rzMax * 0.42, xOff: side * (shoulderW * 0.81), zOff: cz, ao: 0.84 },
-      { y: shoulderY - topR * 0.72, rx: rxMax * 0.92, rz: rzMax * 0.94, xOff: cx, zOff: cz, ao: 0.9 },
-      { y: shoulderY - topR * 0.25, rx: rxMax, rz: rzMax, xOff: cx, zOff: cz, ao: 0.94 },
-      { y: shoulderY + 0.012, rx: rxMax * 0.56, rz: rzMax * 0.56, xOff: side * (shoulderW * 0.83), zOff: cz, ao: 0.95 },
+      { y: shoulderY - topR * 0.92, rx: rxMax * 0.85, rz: rzMax * 0.85, xOff: cx, zOff: cz, ao: 0.88 },
+      { y: shoulderY + 0.008, rx: rxMax * 0.68, rz: rzMax * 0.68, xOff: side * (shoulderW * 0.84), zOff: cz, ao: 0.95 },
     ];
-    this.loftTube(jointRings, 14, material, slot, bodyPartId, {
+    this.loftTube(jointRings, 6, material, slot, bodyPartId, {
       zBias: -0.002,
-      capTop: true,
-      capBottom: true,
+      capTop: false,
+      capBottom: false,
       superEllipse: 0.012,
     });
   }
@@ -1134,9 +1125,16 @@ class SmoothQuadBuilder {
       ];
     }
 
-    const sampled = sampleSplineRings(controls, 7);
-    const { grid } = this.loftTube(sampled, 16, material, slot, partId, {
-      capTop: true,
+    // Tối ưu mật độ tay áo: 4–5 vòng dọc × 10 cạnh ngang + bịt đáy cổ tay bằng cavityMat kín 100%
+    const armBands =
+      sleeveStyle === 'hoodie' || sleeveStyle === 'puff' || sleeveStyle === 'shirt'
+        ? 4
+        : 3;
+    const sampled = sampleSplineRings(controls, armBands);
+    this.loftTube(sampled, 10, material, slot, partId, {
+      capTop: false,
+      capBottom: true,
+      capBottomMaterial: cavityMat,
       superEllipse: 0.015,
     });
 
@@ -1164,53 +1162,6 @@ class SmoothQuadBuilder {
       const bandRing = sampleRingAtT(sampled, 0.12);
       this.addCircumferentialSeam(bandRing, 0.015, 0.002, partId, material, 1.2, 'seamDark');
     }
-
-    // Đóng kín đầu ống tay bám chính xác theo trục ống tay áo (Watertight Axis-Aligned Cuff Plug)
-    const cuff = sampled[0];
-    const upperInner = sampleRingAtT(sampled, Math.min(0.28, 0.042 / Math.max(0.08, length)));
-    const innerLiner = this.loftTube(
-      [
-        {
-          y: cuff.y + 0.005,
-          rx: Math.max(0.014, cuff.rx * 0.88),
-          rz: Math.max(0.014, cuff.rz * 0.88),
-          xOff: cuff.xOff,
-          zOff: cuff.zOff,
-          ao: 0.72,
-        },
-        {
-          y: Math.max(cuff.y + 0.024, upperInner.y),
-          rx: Math.max(0.012, upperInner.rx * 0.7),
-          rz: Math.max(0.012, upperInner.rz * 0.7),
-          xOff: upperInner.xOff,
-          zOff: upperInner.zOff,
-          ao: 0.56,
-        },
-      ],
-      16,
-      cavityMat,
-      slot,
-      partId,
-      {
-        zBias: -0.012,
-        inward: true,
-        capTop: true,
-        superEllipse: 0.015,
-      }
-    );
-
-    this.bridgeEdgeStrip(
-      [...grid[0], grid[0][0]],
-      [...innerLiner.grid[0], innerLiner.grid[0][0]],
-      0,
-      -1,
-      0,
-      partId,
-      0.002,
-      material,
-      slot,
-      0.88
-    );
   }
 
   /**
@@ -1229,7 +1180,7 @@ class SmoothQuadBuilder {
     partId: MeshPartId,
     extendAnkleForPants = false
   ) {
-    const segs = 16;
+    const segs = 8;
     const toeOutYaw = side * 0.055;
     const cosY = Math.cos(toeOutYaw);
     const sinY = Math.sin(toeOutYaw);
@@ -1332,46 +1283,11 @@ class SmoothQuadBuilder {
       const sTop = buildHeelRing(0.009, 0.011, 1.0, 1.0, 1.0);
       connectPair(sBot, sTop, 0.025, fz + 0.02, 'sole_dark', 0.9, soleGroup, 0.05);
 
-      // Đóng kín mặt đáy đế giày cao gót bám sát vòm cong
-      const botCapGroup = this.allocSmoothGroup();
-      const botCenter = this.addVertex(...toWorld(0, archY(0.02), 0.02));
-      for (let j = 0; j < segs; j += 2) {
-        this.addDirectedQuad(
-          sBot[j],
-          sBot[(j + 1) % segs],
-          sBot[(j + 2) % segs],
-          botCenter,
-          0,
-          -1,
-          0,
-          partId,
-          -0.004,
-          false,
-          'sole_dark',
-          'shoes',
-          0.7,
-          botCapGroup
-        );
-      }
-
       // 2. Thân giày cao gót khoét mu thấp thanh mảnh
       const upperGroup = this.allocSmoothGroup();
-      const u0 = buildHeelRing(0.009, 0.011, 0.99, 0.99, 0.99);
+      const u0 = buildHeelRing(0.009, 0.011, 1.0, 1.0, 1.0);
       const u1 = buildHeelRing(0.024, 0.036, 0.94, 0.88, 0.92);
       const u2 = buildHeelRing(0.032, 0.058, 0.84, 0.56, 0.86, -0.006);
-      // Bịt kín khe viền tiếp giáp giữa đế và thân giày
-      this.bridgeEdgeStrip(
-        [...sTop, sTop[0]],
-        [...u0, u0[0]],
-        0,
-        1,
-        0,
-        partId,
-        0.001,
-        'sole_dark',
-        'shoes',
-        0.86
-      );
       connectPair(u0, u1, 0.04, fz + 0.015, 'shoes', 0.98, upperGroup, 0.22);
       connectPair(u1, u2, 0.065, fz, 'shoes', 1.0, upperGroup, 0.22);
 
@@ -1397,32 +1313,29 @@ class SmoothQuadBuilder {
         );
       }
 
-      // 3. Mu bàn chân & cổ chân mannequin (#D2CCC4) đóng kín 2 đầu, cắm sâu vào gấu quần nếu mặc quần dài
+      // 3. Mu bàn chân & cổ chân mannequin (#D2CCC4) cắm sâu vào gấu quần nếu mặc quần dài
       const footRings: RingDef[] = [
-        { y: 0.036, rx: 0.025, rz: 0.044, xOff: fx, zOff: fz + 0.012, ao: 0.93 },
-        { y: 0.068, rx: 0.028, rz: 0.042, xOff: fx, zOff: fz - 0.004, ao: 0.97 },
+        { y: 0.042, rx: 0.026, rz: 0.042, xOff: fx, zOff: fz + 0.006, ao: 0.94 },
         { y: 0.105, rx: 0.03, rz: 0.032, xOff: fx, zOff: fz - 0.018, ao: 0.96 },
       ];
       if (extendAnkleForPants) {
         footRings.push({ y: 0.145, rx: 0.031, rz: 0.033, xOff: fx, zOff: 0.0, ao: 0.92 });
       }
-      this.loftTube(footRings, 12, 'mannequin_leg', 'shoes', partId, {
+      this.loftTube(footRings, 8, 'mannequin_leg', 'shoes', partId, {
         capTop: true,
-        capBottom: true,
+        capBottom: false,
         zBias: 0.004,
       });
 
-      // 4. GÓT NHỌN MẢNH TÁCH BIỆT RÕ RÀNG (Stiletto Heel Post đóng kín 2 đầu)
+      // 4. GÓT NHỌN MẢNH TÁCH BIỆT RÕ RÀNG (Stiletto Heel Post gọn nhẹ)
       const [hx, , hz] = toWorld(0, 0, heelZ);
       const stilettoRings: RingDef[] = [
-        { y: 0.0, rx: 0.0068, rz: 0.0072, xOff: hx, zOff: hz, ao: 0.82 },
-        { y: 0.014, rx: 0.0074, rz: 0.0078, xOff: hx, zOff: hz, ao: 0.88 },
-        { y: 0.042, rx: 0.0096, rz: 0.0108, xOff: hx, zOff: hz + 0.002, ao: 0.94 },
+        { y: 0.009, rx: 0.0074, rz: 0.0078, xOff: hx, zOff: hz, ao: 0.88 },
         { y: 0.068, rx: 0.0155, rz: 0.0175, xOff: hx, zOff: hz + 0.005, ao: 0.96 },
       ];
-      this.loftTube(stilettoRings, 10, 'shoes', 'shoes', partId, {
-        capTop: true,
-        capBottom: true,
+      this.loftTube(stilettoRings, 6, 'shoes', 'shoes', partId, {
+        capTop: false,
+        capBottom: false,
         shininess: 0.22,
       });
       // Đệm gót cao su đen ở đầu nhọn tiếp sàn
@@ -1431,11 +1344,11 @@ class SmoothQuadBuilder {
           { y: 0.0, rx: 0.0072, rz: 0.0076, xOff: hx, zOff: hz, ao: 0.8 },
           { y: 0.009, rx: 0.0074, rz: 0.0078, xOff: hx, zOff: hz, ao: 0.84 },
         ],
-        10,
+        6,
         'sole_dark',
         'shoes',
         partId,
-        { capTop: true, capBottom: true }
+        { capTop: false, capBottom: false }
       );
 
       // Viền khoét mu thanh mảnh
@@ -1567,66 +1480,42 @@ class SmoothQuadBuilder {
     const soleTop = buildLastRing(
       soleH,
       isDress ? soleH + 0.01 : isLoafer ? soleH + 0.005 : soleH,
-      isSneaker ? 1.05 : 1.03,
-      isSneaker ? 1.03 : 1.02,
-      1.03
+      isSneaker ? 1.05 : 1.02,
+      isSneaker ? 1.03 : 1.01,
+      1.02
     );
     connectRingPair(soleBot, soleTop, soleH * 0.5, fz + 0.02, soleMat, isSneaker ? 0.99 : 0.91, soleGroup);
 
-    // Đóng kín đáy đế giày (cả 2 chiếc)
-    const botCapGroup = this.allocSmoothGroup();
-    const botCenter = this.addVertex(...toWorld(0, 0.0, 0.02));
-    for (let j = 0; j < segs; j += 2) {
-      this.addDirectedQuad(
-        soleBot[j],
-        soleBot[(j + 1) % segs],
-        soleBot[(j + 2) % segs],
-        botCenter,
+    // 2. THÂN GIÀY + MU BÀN CHÂN + CỔ GIÀY LIỀN KHỐI GỌN NHẸ
+    const upperGroup = this.allocSmoothGroup();
+    const heelLift = isDress ? 0.01 : isLoafer ? 0.005 : 0;
+    const r0 = isSneaker
+      ? buildLastRing(soleH, soleH + heelLift, 0.99, 0.99, 0.99)
+      : buildLastRing(soleH, soleH + heelLift, 1.02, 1.01, 1.02);
+
+    if (isSneaker) {
+      // Bịt kín gờ trắng đế Sneaker
+      this.bridgeEdgeStrip(
+        [...soleTop, soleTop[0]],
+        [...r0, r0[0]],
         0,
-        -1,
+        1,
         0,
         partId,
-        -0.005,
-        false,
+        0.001,
         soleMat,
         'shoes',
-        0.74,
-        botCapGroup
+        0.96
       );
     }
 
-    // 2. THÂN GIÀY + MU BÀN CHÂN + CỔ GIÀY LIỀN KHỐI 100% WATERTIGHT
-    const upperGroup = this.allocSmoothGroup();
-    const heelLift = isDress ? 0.01 : isLoafer ? 0.005 : 0;
-    const r0 = buildLastRing(soleH, soleH + heelLift, 0.99, 0.99, 0.99);
-    // Bịt kín gờ tiếp giáp giữa viền trên đế giày (soleTop) và chân thân giày (r0)
-    this.bridgeEdgeStrip(
-      [...soleTop, soleTop[0]],
-      [...r0, r0[0]],
-      0,
-      1,
-      0,
-      partId,
-      0.001,
-      soleMat,
-      'shoes',
-      isSneaker ? 0.96 : 0.88
-    );
-
-    const r1 = buildLastRing(
-      soleH + (isDress ? 0.015 : isLoafer ? 0.016 : 0.025),
-      soleH + heelLift + (isDress ? 0.032 : isLoafer ? 0.031 : 0.044),
-      0.96,
-      0.95,
-      0.95
-    );
-    const r2 = buildLastRing(
-      soleH + (isDress ? 0.027 : isLoafer ? 0.028 : 0.048),
-      soleH + heelLift + (isDress ? 0.048 : isLoafer ? 0.046 : 0.068),
+    const rMid = buildLastRing(
+      soleH + (isDress ? 0.024 : isLoafer ? 0.025 : 0.042),
+      soleH + heelLift + (isDress ? 0.044 : isLoafer ? 0.042 : 0.062),
+      0.9,
+      isDress ? 0.76 : 0.78,
       0.88,
-      isDress ? 0.72 : 0.74,
-      0.86,
-      -0.006
+      -0.005
     );
     const rAnkleBase = buildLastRing(
       soleH + (isDress ? 0.044 : isLoafer ? 0.039 : 0.066),
@@ -1637,29 +1526,19 @@ class SmoothQuadBuilder {
       -0.018
     );
 
-    connectRingPair(r0, r1, soleH + 0.016, fz + 0.015, 'shoes', 0.97, upperGroup, 0, upperShininess);
-    connectRingPair(r1, r2, soleH + 0.04, fz + 0.01, 'shoes', 0.99, upperGroup, 0, upperShininess);
-    connectRingPair(r2, rAnkleBase, soleH + 0.06, fz, 'shoes', 1.0, upperGroup, 0, upperShininess);
+    connectRingPair(r0, rMid, soleH + 0.026, fz + 0.012, 'shoes', 0.98, upperGroup, 0, upperShininess);
+    connectRingPair(rMid, rAnkleBase, soleH + 0.056, fz, 'shoes', 1.0, upperGroup, 0, upperShininess);
 
     let topRing = rAnkleBase;
     let topY = soleH + heelLift + (isLoafer ? 0.045 : isDress ? 0.054 : 0.072);
 
     if (isBoot) {
       // Boot cổ cao vượt hẳn mắt cá chân ôm gọn bắp chân dưới!
-      const bootMidY = isFemale ? 0.155 : 0.168;
       const bootTopY = isFemale ? 0.215 : 0.232;
-      const rBootMid = buildLastRing(bootMidY, bootMidY + 0.004, 0.86, 0.33, 0.66, -0.02);
       const rBootTop = buildLastRing(bootTopY, bootTopY + 0.005, 0.9, 0.34, 0.68, -0.02);
-      connectRingPair(rAnkleBase, rBootMid, (topY + bootMidY) * 0.5, fz - 0.018, 'shoes', 0.97, upperGroup);
-      connectRingPair(rBootMid, rBootTop, (bootMidY + bootTopY) * 0.5, fz - 0.018, 'shoes', 0.95, upperGroup);
+      connectRingPair(rAnkleBase, rBootTop, (topY + bootTopY) * 0.5, fz - 0.018, 'shoes', 0.96, upperGroup);
       topRing = rBootTop;
       topY = bootTopY + 0.002;
-    } else if (isSneaker) {
-      const collarTopY = soleH + 0.088;
-      const rCollar = buildLastRing(collarTopY, collarTopY + 0.004, 0.84, 0.32, 0.68, -0.02);
-      connectRingPair(rAnkleBase, rCollar, (topY + collarTopY) * 0.5, fz - 0.018, 'shoes', 0.95, upperGroup);
-      topRing = rCollar;
-      topY = collarTopY + 0.002;
     }
 
     // Đóng kín cổ giày (lòng cổ giày tối màu)
@@ -1685,25 +1564,23 @@ class SmoothQuadBuilder {
     }
 
     // Khớp cổ chân mannequin cắm sâu từ bên trong cổ giày lên tận bên trong gấu quần dài
-    // (triệt tiêu 100% khe hở cổ chân khi mặc Quần Jean / Quần Suông với Loafer, Giày da, Sneaker)
     if (extendAnkleForPants && !isBoot) {
       const ankleRx = isFemale ? 0.028 : 0.034;
       const ankleRz = isFemale ? 0.03 : 0.036;
       const [ax0, , az0] = toWorld(0, 0, -0.018);
       this.loftTube(
         [
-          { y: Math.max(0.028, soleH + 0.012), rx: ankleRx * 0.94, rz: ankleRz * 0.94, xOff: ax0, zOff: az0, ao: 0.84 },
-          { y: topY + 0.016, rx: ankleRx, rz: ankleRz, xOff: fx, zOff: az0 * 0.5, ao: 0.92 },
-          { y: 0.148, rx: ankleRx * 1.06, rz: ankleRz * 1.06, xOff: fx, zOff: 0.0, ao: 0.88 },
+          { y: Math.max(0.028, soleH + 0.012), rx: ankleRx * 0.94, rz: ankleRz * 0.94, xOff: ax0, zOff: az0, ao: 0.86 },
+          { y: 0.148, rx: ankleRx * 1.06, rz: ankleRz * 1.06, xOff: fx, zOff: 0.0, ao: 0.9 },
         ],
-        12,
+        6,
         'mannequin_leg',
         'shoes',
         partId,
         {
           zBias: -0.003,
-          capTop: true,
-          capBottom: true,
+          capTop: false,
+          capBottom: false,
           superEllipse: 0.01,
         }
       );
@@ -2001,6 +1878,7 @@ class SmoothQuadBuilder {
     const ALL_PARTS: MeshPartId[] = [
       'mannequinCore',
       'bottomCore',
+      'pelvis',
       'neckCavity',
       'torsoCore',
       'outerwearShell',
@@ -2136,7 +2014,7 @@ function addRedesignedHoodieHood(
   const liningMat: MeshMaterialKind = isOuter ? 'outer_lining' : 'top_lining';
   const cavityMat: MeshMaterialKind = isOuter ? 'outer_cavity' : 'inner_cavity';
 
-  // 1. Vòng cổ mũ 2 mặt dày kín 100% Watertight (vỏ ngoài + mặt lót trong tối màu + mép viền trên/dưới/trước)
+  // 1. Vòng cổ mũ 2 mặt dày kín gọn nhẹ
   const collarRings: RingDef[] = [
     {
       y: isOuter ? 1.468 : 1.448,
@@ -2148,15 +2026,6 @@ function addRedesignedHoodieHood(
       frontGap: isOuter ? 0.48 : 0,
     },
     {
-      y: 1.49,
-      rx: neckRx * 1.24 * scale,
-      rz: neckRz * 1.18 * scale,
-      zOff: -0.014,
-      ao: 0.99,
-      neckDrop: 0.014,
-      frontGap: isOuter ? 0.5 : 0,
-    },
-    {
       y: 1.51,
       rx: neckRx * 1.12 * scale,
       rz: neckRz * 1.08 * scale,
@@ -2166,7 +2035,7 @@ function addRedesignedHoodieHood(
       frontGap: isOuter ? 0.54 : 0,
     },
   ];
-  mb.addThickCollar(collarRings, 18, material, liningMat, slot, collarPartId, {
+  mb.addThickCollar(collarRings, 8, material, liningMat, slot, collarPartId, {
     zBias: 0.01,
     openFront: isOuter,
     superEllipse: 0.015,
@@ -2176,12 +2045,13 @@ function addRedesignedHoodieHood(
 
   // Đường xếp lớp chéo cổ mũ mặt trước (chỉ vẽ khi mặc hoodie kín)
   if (!isOuter) {
+    const midCollar = sampleRingAtT(collarRings, 0.5);
     mb.addDetailLine(
       collarPartId,
       material,
       [
-        evalRingPoint(collarRings[2], -0.45, 0.015, 1.0, 0.004),
-        evalRingPoint(collarRings[1], -0.1, 0.015, 1.0, 0.005),
+        evalRingPoint(collarRings[1], -0.45, 0.015, 1.0, 0.004),
+        evalRingPoint(midCollar, -0.1, 0.015, 1.0, 0.005),
         evalRingPoint(collarRings[0], 0.24, 0.015, 1.0, 0.004),
       ],
       [0, 0.2, 1],
@@ -2192,8 +2062,8 @@ function addRedesignedHoodieHood(
       collarPartId,
       material,
       [
-        evalRingPoint(collarRings[2], 0.45, 0.015, 1.0, 0.004),
-        evalRingPoint(collarRings[1], 0.1, 0.015, 1.0, 0.005),
+        evalRingPoint(collarRings[1], 0.45, 0.015, 1.0, 0.004),
+        evalRingPoint(midCollar, 0.1, 0.015, 1.0, 0.005),
         evalRingPoint(collarRings[0], -0.24, 0.015, 1.0, 0.004),
       ],
       [0, 0.2, 1],
@@ -2202,40 +2072,21 @@ function addRedesignedHoodieHood(
     );
   }
 
-  // 2. Vạt mũ rũ phẳng mềm hình giọt nước ôm sát vùng lưng trên (`hoodBack`, -Z) — kín 2 đầu + lõi đệm sau gáy
+  // 2. Vạt mũ rũ phẳng mềm hình giọt nước ôm sát vùng lưng trên (`hoodBack`, -Z) — tối ưu số vòng gọn nhẹ
   const backZBase = isOuter ? -0.132 : -0.114;
   const drapeControls: RingDef[] = [
-    // Đáy vạt mũ rũ tròn mềm áp sát giữa lưng trên
     { y: 1.235, rx: 0.056 * scale, rz: 0.019 * scale, zOff: backZBase - 0.008, ao: 0.89 },
-    // Thân dưới vạt mũ mở rộng hình giọt nước/vỏ sò dẹt
-    { y: 1.295, rx: 0.114 * scale, rz: 0.032 * scale, zOff: backZBase - 0.018, ao: 0.95 },
-    // Bụng mũ rũ rộng nhất ôm êm hai bả vai
-    { y: 1.365, rx: 0.138 * scale, rz: 0.042 * scale, zOff: backZBase - 0.02, ao: 0.99 },
-    // Uốn cong mượt lên bờ vai sau
-    { y: 1.435, rx: 0.128 * scale, rz: 0.045 * scale, zOff: backZBase + 0.005, ao: 0.98 },
-    // Nối liền khối khít vào vòng cổ mũ sau gáy
+    { y: 1.32, rx: 0.126 * scale, rz: 0.038 * scale, zOff: backZBase - 0.019, ao: 0.97 },
+    { y: 1.42, rx: 0.132 * scale, rz: 0.044 * scale, zOff: backZBase + 0.002, ao: 0.98 },
     { y: 1.494, rx: neckRx * 1.18 * scale, rz: 0.044 * scale, zOff: -0.06 * scale, ao: 0.96 },
   ];
-  const drapeSampled = sampleSplineRings(drapeControls, 6);
-  mb.loftTube(drapeSampled, 16, material, slot, 'hoodBack', {
+  const drapeSampled = sampleSplineRings(drapeControls, 3);
+  mb.loftTube(drapeSampled, 8, material, slot, 'hoodBack', {
     capTop: true,
     capBottom: true,
     capTopMaterial: cavityMat,
     superEllipse: 0.02,
   });
-
-  // Nếp lót tối màu nằm khít trong rãnh tiếp nối giữa vòng cổ mũ và vạt mũ sau gáy
-  mb.loftTube(
-    [
-      { y: 1.452, rx: neckRx * 0.96 * scale, rz: 0.03 * scale, zOff: -0.068 * scale, ao: 0.72 },
-      { y: 1.498, rx: neckRx * 1.02 * scale, rz: 0.032 * scale, zOff: -0.062 * scale, ao: 0.78 },
-    ],
-    14,
-    cavityMat,
-    slot,
-    'hoodBack',
-    { zBias: -0.006, capTop: true, capBottom: true, superEllipse: 0.015 }
-  );
 
   // Đường sống mũ chạy dọc giữa mặt sau vạt mũ + viền nếp rũ hai bên (nhìn cực đẹp ở góc Nghiêng & Sau)
   mb.addSurfaceCurve(
@@ -2299,23 +2150,22 @@ export function buildOutfitMesh3D(
   //    Vẽ TRƯỚC `bottom` và `torsoLayerGroup` (cắm sâu +0.14 vào áo trên & -0.14 xuống cạp quần/váy dưới)
   // -----------------------------------------------------------
   if (isSoloBlouse) {
-    // Cổ & xương quai xanh ma-nơ-canh (#D2CCC4) đóng kín 2 đầu, cắm sâu vào ngực áo kiểu
+    // Cổ & xương quai xanh ma-nơ-canh (#D2CCC4) đóng kín đỉnh, cắm sâu vào ngực áo kiểu
     mb.loftTube(
       sampleSplineRings(
         [
           { y: 1.24, rx: 0.122, rz: 0.086, ao: 0.88 },
-          { y: 1.355, rx: 0.126, rz: 0.09, ao: 0.95 },
-          { y: 1.415, rx: 0.114, rz: 0.08, ao: 0.99 },
+          { y: 1.385, rx: 0.12, rz: 0.085, ao: 0.97 },
           { y: 1.465, rx: neckRx * 0.94, rz: neckRz * 0.9, ao: 0.96 },
           { y: 1.505, rx: neckRx * 0.82, rz: neckRz * 0.8, ao: 0.92 },
         ],
-        5
+        3
       ),
-      18,
+      12,
       'mannequin_leg',
       'top',
       'mannequinCore',
-      { capTop: true, capBottom: true }
+      { capTop: true, capBottom: false }
     );
   }
 
@@ -2328,18 +2178,17 @@ export function buildOutfitMesh3D(
       sampleSplineRings(
         [
           { y: 0.75, rx: midriffRx * 0.92, rz: midriffRz * 0.88, zOff: -0.004, ao: 0.86 },
-          { y: 0.896, rx: midriffRx * 1.03, rz: midriffRz * 0.99, zOff: -0.005, ao: 0.95 },
-          { y: 0.965, rx: midriffRx, rz: midriffRz, zOff: -0.007, ao: 0.99 },
-          { y: 1.035, rx: midriffRx * 0.99, rz: midriffRz * 0.99, zOff: -0.007, ao: 0.96 },
+          { y: 0.93, rx: midriffRx * 1.01, rz: midriffRz * 0.99, zOff: -0.006, ao: 0.98 },
+          { y: 1.04, rx: midriffRx * 0.99, rz: midriffRz * 0.99, zOff: -0.007, ao: 0.96 },
           { y: 1.18, rx: midriffRx * 0.88, rz: midriffRz * 0.88, zOff: -0.007, ao: 0.88 },
         ],
-        6
+        3
       ),
-      20,
+      14,
       'mannequin_leg',
       'top',
       'mannequinCore',
-      { capTop: true, capBottom: true, superEllipse: 0.014 }
+      { capTop: false, capBottom: false, superEllipse: 0.014 }
     );
   }
 
@@ -2436,31 +2285,28 @@ export function buildOutfitMesh3D(
       ];
     }
 
-    const torsoSegs = 24;
-    const torsoSampled = sampleSplineRings(torsoControls, 8);
-    const torsoOuter = mb.loftTube(torsoSampled, torsoSegs, 'top', 'top', 'torsoCore', {
+    const torsoSegs = 16;
+    const torsoSampled = sampleSplineRings(torsoControls, 6);
+    mb.loftTube(torsoSampled, torsoSegs, 'top', 'top', 'torsoCore', {
       zBias: 0,
       superEllipse: torsoSq,
     });
 
-    // BỊT KÍN MIỆNG CỔ ÁO (`neckCavity` vẽ TRƯỚC `torsoLayerGroup` để cổ áo trước tự che gọn phần dưới lòng cổ)
+    // BỊT KÍN MIỆNG CỔ ÁO (`neckCavity` bám khít mép `topRim` -> 100% Watertight, 0 khe hở, tiết kiệm quad!)
     const topRim = torsoSampled[torsoSampled.length - 1];
-    const neckInset = 0.0075;
     if (isSoloBlouse) {
-      const blouseRimInner = mb.loftTube(
+      mb.loftTube(
         [
           {
             ...topRim,
             y: topRim.y - 0.026,
-            rx: Math.max(0.024, topRim.rx - 0.013),
-            rz: Math.max(0.024, topRim.rz - 0.013),
+            rx: Math.max(0.024, topRim.rx - 0.012),
+            rz: Math.max(0.024, topRim.rz - 0.012),
             ao: 0.66,
           },
           {
             ...topRim,
-            rx: Math.max(0.026, topRim.rx - neckInset),
-            rz: Math.max(0.026, topRim.rz - neckInset),
-            ao: 0.8,
+            ao: 0.82,
           },
         ],
         torsoSegs,
@@ -2469,25 +2315,11 @@ export function buildOutfitMesh3D(
         'neckCavity',
         { inward: true, superEllipse: torsoSq }
       );
-      const topRow = torsoOuter.grid[torsoOuter.grid.length - 1];
-      const inTopRow = blouseRimInner.grid[1];
-      mb.bridgeEdgeStrip(
-        [...topRow, topRow[0]],
-        [...inTopRow, inTopRow[0]],
-        0,
-        1,
-        0,
-        'torsoCore',
-        0.003,
-        'top',
-        'top',
-        0.92
-      );
     } else {
-      const neckWell = mb.loftTube(
+      mb.loftTube(
         [
           {
-            y: topRim.y - 0.095,
+            y: topRim.y - 0.09,
             rx: Math.max(0.02, topRim.rx * 0.72),
             rz: Math.max(0.02, topRim.rz * 0.72),
             xOff: topRim.xOff,
@@ -2495,18 +2327,7 @@ export function buildOutfitMesh3D(
             ao: 0.58,
           },
           {
-            y: topRim.y - 0.045,
-            rx: Math.max(0.022, topRim.rx * 0.86),
-            rz: Math.max(0.022, topRim.rz * 0.86),
-            xOff: topRim.xOff,
-            zOff: topRim.zOff,
-            neckDrop: (topRim.neckDrop ?? 0) * 0.5,
-            ao: 0.72,
-          },
-          {
             ...topRim,
-            rx: Math.max(0.024, topRim.rx - neckInset),
-            rz: Math.max(0.024, topRim.rz - neckInset),
             ao: 0.82,
           },
         ],
@@ -2516,52 +2337,7 @@ export function buildOutfitMesh3D(
         'neckCavity',
         { inward: true, capBottom: true, superEllipse: torsoSq }
       );
-      const topRow = torsoOuter.grid[torsoOuter.grid.length - 1];
-      const inTopRow = neckWell.grid[neckWell.grid.length - 1];
-      mb.bridgeEdgeStrip(
-        [...topRow, topRow[0]],
-        [...inTopRow, inTopRow[0]],
-        0,
-        1,
-        0,
-        'torsoCore',
-        0.003,
-        'top',
-        'top',
-        0.92
-      );
     }
-
-    // BỊT KÍN VÒNG GẦM GẤU ÁO (`hemSealRing`): nối thẳng từ mép gấu áo khép vào bán kính eo/cạp quần,
-    // pháp tuyến (0, -1, 0), màu tối hơn áo 45% (`inner_cavity`), CHỈ VẼ khi dot(N, V) > 0.05!
-    const botRim = torsoSampled[0];
-    const innerWaistRing: RingDef = {
-      ...botRim,
-      y: botRim.y + 0.002,
-      rx: Math.max(0.024, botRim.rx * 0.76),
-      rz: Math.max(0.024, botRim.rz * 0.76),
-      ao: 0.78,
-    };
-    const innerWaistRow: number[] = [];
-    for (let j = 0; j < torsoSegs; j++) {
-      const theta = (j / torsoSegs) * Math.PI * 2;
-      const [vx, vy, vz] = evalRingPoint(innerWaistRing, theta, torsoSq);
-      innerWaistRow.push(mb.addVertex(vx, vy, vz));
-    }
-    mb.bridgeEdgeStrip(
-      [...torsoOuter.grid[0], torsoOuter.grid[0][0]],
-      [...innerWaistRow, innerWaistRow[0]],
-      0,
-      -1,
-      0,
-      'torsoCore',
-      -0.004,
-      'inner_cavity',
-      'top',
-      0.86,
-      false,
-      true
-    );
 
     {
       // Chọn thông số tay áo theo từng phom áo để nhìn 1 giây phân biệt ngay
@@ -2617,13 +2393,13 @@ export function buildOutfitMesh3D(
         const hemTrimRing = sampleRingAtT(torsoSampled, 0.04);
         mb.addCircumferentialSeam(hemTrimRing, torsoSq, 0.002, 'torsoCore', 'top', 1.0, 'seamDark');
       } else if (isSoloPolo) {
-        // Cổ bẻ gập 2 mặt dày kín 100% Watertight
+        // Cổ bẻ gập 2 mặt dày kín 100% Watertight (12 cạnh gọn nhẹ)
         mb.addThickCollar(
           [
             { y: 1.466, rx: neckRx * 1.18, rz: neckRz * 1.16, ao: 0.96, neckDrop: 0.032 },
             { y: 1.516, rx: neckRx * 1.05, rz: neckRz * 1.04, ao: 1.0, neckDrop: 0.022 },
           ],
-          18,
+          12,
           'top',
           'top_lining',
           'top',
@@ -2649,7 +2425,11 @@ export function buildOutfitMesh3D(
         });
         // Trụ nẹp cúc ngắn xuống 1/3 ngực + 3 cúc nổi bật
         mb.addConformingPatch(
-          torsoSampled.slice(5, 8),
+          [
+            sampleRingAtT(torsoSampled, 0.6),
+            sampleRingAtT(torsoSampled, 0.77),
+            sampleRingAtT(torsoSampled, 0.93),
+          ],
           torsoSq,
           () => -0.075,
           () => 0.075,
@@ -2718,7 +2498,7 @@ export function buildOutfitMesh3D(
             { y: 1.472, rx: neckRx * 1.16, rz: neckRz * 1.15, ao: 0.95, neckDrop: 0.035 },
             { y: 1.524, rx: neckRx * 1.05, rz: neckRz * 1.04, ao: 1.0, neckDrop: 0.025 },
           ],
-          18,
+          12,
           'top',
           'top_lining',
           'top',
@@ -2780,18 +2560,22 @@ export function buildOutfitMesh3D(
         mb.addCircumferentialSeam(waistMidRing, torsoSq, 0.002, 'torsoCore', 'top', 0.9, 'seamDark');
 
         // Túi Kangaroo hình thang nổi rõ ở bụng dưới + 2 miệng túi chéo tối màu
-        const pocketRings = torsoSampled.slice(1, 4);
+        const pocketRings = [
+          sampleRingAtT(torsoSampled, 0.14),
+          sampleRingAtT(torsoSampled, 0.3),
+          sampleRingAtT(torsoSampled, 0.44),
+        ];
         mb.addConformingPatch(
           pocketRings,
           torsoSq,
           t => -0.56 + t * 0.15,
           t => 0.56 - t * 0.15,
           0.011,
-          4,
+          2,
           'top',
           'top',
           'torsoCore',
-          { zBias: 0.014, ao: 1.03, sideBevel: true }
+          { zBias: 0.014, ao: 1.03, sideBevel: false }
         );
         // Viền trên & 2 đường miệng túi chéo tối màu không thể nhầm lẫn
         const pTopR = pocketRings[pocketRings.length - 1];
@@ -2849,18 +2633,23 @@ export function buildOutfitMesh3D(
         });
       } else if (isSoloBlazer) {
         // 2 ve áo chữ V có khía (Notched Lapels) + 2 cúc + 2 nắp túi hông + đường xẻ tà sau lưng
+        const soloLapelRings = [
+          sampleRingAtT(torsoSampled, 0.42),
+          sampleRingAtT(torsoSampled, 0.68),
+          sampleRingAtT(torsoSampled, 0.92),
+        ];
         ([-1, 1] as const).forEach(s => {
           mb.addConformingPatch(
-            torsoSampled.slice(3, torsoSampled.length - 1),
+            soloLapelRings,
             torsoSq,
             t => (s === 1 ? 0.04 + t * 0.1 : -(0.28 + t * 0.22)),
             t => (s === 1 ? 0.28 + t * 0.22 : -(0.04 + t * 0.1)),
             0.011,
-            2,
+            1,
             'top',
             'top',
             'torsoCore',
-            { zBias: 0.014, ao: 1.04, sideBevel: true }
+            { zBias: 0.014, ao: 1.04, sideBevel: false }
           );
           // Viền gập ve áo có khía chữ V sắc nét
           const rMid = sampleRingAtT(torsoSampled, 0.44);
@@ -2947,7 +2736,8 @@ export function buildOutfitMesh3D(
           { y: 1.474, rx: neckRx * 1.22, rz: neckRz * 1.2, frontGap: 0.58, ao: 0.94, neckDrop: 0.022 },
         ];
 
-    const outerBands = isBlazerOuter ? 8 : 7;
+    const outerBands = 5; // 6 vòng dọc
+    const outerSegs = 14; // ~16.8 cạnh tương đương khi mở vạt trước
     const outerSampled = sampleSplineRings(outerControls, outerBands);
     const outerSq = isBlazerOuter ? 0.028 : 0.018;
 
@@ -2972,19 +2762,19 @@ export function buildOutfitMesh3D(
     });
 
     const frontArcRad = (100 * Math.PI) / 180;
-    const innerTopSegs = 16;
-    const innerTopMesh = mb.loftTube(innerTopRings, innerTopSegs, 'top', 'top', 'torsoCore', {
+    const innerTopSegs = 8;
+    mb.loftTube(innerTopRings, innerTopSegs, 'top', 'top', 'torsoCore', {
       zBias: 0,
       thetaRange: [-frontArcRad, frontArcRad],
       superEllipse: outerSq,
     });
 
-    // Lòng cổ áo trong (`neckCavity`, vẽ TRƯỚC `torsoLayerGroup`) — đóng kín hốc cổ 360°
+    // Lòng cổ áo trong (`neckCavity`, vẽ TRƯỚC `torsoLayerGroup`) — đóng kín hốc cổ 360° gọn nhẹ
     const innerTopRim = innerTopRings[innerTopRings.length - 1];
     mb.loftTube(
       [
         {
-          y: innerTopRim.y - 0.095,
+          y: innerTopRim.y - 0.09,
           rx: Math.max(0.02, innerTopRim.rx * 0.72),
           rz: Math.max(0.02, innerTopRim.rz * 0.72),
           xOff: innerTopRim.xOff,
@@ -2992,84 +2782,19 @@ export function buildOutfitMesh3D(
           ao: 0.58,
         },
         {
-          y: innerTopRim.y - 0.045,
-          rx: Math.max(0.022, innerTopRim.rx * 0.86),
-          rz: Math.max(0.022, innerTopRim.rz * 0.86),
-          xOff: innerTopRim.xOff,
-          zOff: innerTopRim.zOff,
-          neckDrop: (innerTopRim.neckDrop ?? 0) * 0.5,
-          ao: 0.72,
-        },
-        {
           ...innerTopRim,
-          rx: Math.max(0.024, innerTopRim.rx - 0.006),
-          rz: Math.max(0.024, innerTopRim.rz - 0.006),
           ao: 0.82,
         },
       ],
-      20,
+      12,
       'inner_cavity',
       'top',
       'neckCavity',
       { inward: true, capBottom: true, superEllipse: outerSq }
     );
 
-    // Mép viền độ dày cổ áo trước của áo trong
-    const innerTopCollarBevelRow: number[] = [];
-    const innerCollarBevelRing: RingDef = {
-      ...innerTopRim,
-      rx: Math.max(0.022, innerTopRim.rx - 0.007),
-      rz: Math.max(0.022, innerTopRim.rz - 0.007),
-    };
-    for (let j = 0; j <= innerTopSegs; j++) {
-      const th = -frontArcRad + (j / innerTopSegs) * (frontArcRad * 2);
-      const [vx, vy, vz] = evalRingPoint(innerCollarBevelRing, th, outerSq);
-      innerTopCollarBevelRow.push(mb.addVertex(vx, vy, vz));
-    }
-    mb.bridgeEdgeStrip(
-      innerTopMesh.grid[innerTopMesh.grid.length - 1],
-      innerTopCollarBevelRow,
-      0,
-      1,
-      0,
-      'torsoCore',
-      0.002,
-      'top',
-      'top',
-      0.9
-    );
-
-    // Vòng bịt gầm gấu áo trong (`hemSealRing`, chỉ vẽ khi dot(N, V) > 0.05)
-    const innerBotRim = innerTopRings[0];
-    const innerTopHemRow: number[] = [];
-    const innerTopHemTucked: RingDef = {
-      ...innerBotRim,
-      y: innerBotRim.y + 0.002,
-      rx: Math.max(0.024, innerBotRim.rx * 0.76),
-      rz: Math.max(0.024, innerBotRim.rz * 0.76),
-    };
-    for (let j = 0; j <= innerTopSegs; j++) {
-      const th = -frontArcRad + (j / innerTopSegs) * (frontArcRad * 2);
-      const [vx, vy, vz] = evalRingPoint(innerTopHemTucked, th, outerSq);
-      innerTopHemRow.push(mb.addVertex(vx, vy, vz));
-    }
-    mb.bridgeEdgeStrip(
-      innerTopMesh.grid[0],
-      innerTopHemRow,
-      0,
-      -1,
-      0,
-      'torsoCore',
-      -0.004,
-      'inner_cavity',
-      'top',
-      0.86,
-      false,
-      true
-    );
-
     // B. VỎ MẶT NGOÀI ÁO KHOÁC (`outerwearShell`) — KHÔNG DỰNG LỚP LÓT LƯNG/SƯỜN TRONG!
-    const outerMesh = mb.loftTube(outerSampled, 24, 'outerwear', 'outerwear', 'outerwearShell', {
+    const outerMesh = mb.loftTube(outerSampled, outerSegs, 'outerwear', 'outerwear', 'outerwearShell', {
       zBias: 0,
       openFront: true,
       inward: false,
@@ -3115,61 +2840,31 @@ export function buildOutfitMesh3D(
       0.88
     );
 
-    // Viền dày cổ trên của áo khoác khép gọn vào phía trong
-    const outerTopIdx = outerMesh.grid.length - 1;
-    const outerTopRim = outerSampled[outerTopIdx];
-    const outerTopGap = Math.max(0.18, outerTopRim.frontGap ?? 0.54);
-    const outerTopInnerRow: number[] = [];
-    for (let j = 0; j <= 24; j++) {
-      const u = j / 24;
-      const th = outerTopGap + u * (Math.PI * 2 - outerTopGap * 2);
-      const [vx, vy, vz] = evalRingPoint(outerTopRim, th, outerSq, 0.86);
-      outerTopInnerRow.push(mb.addVertex(vx, vy, vz));
+    // Viền dày cổ trên của áo khoác Blazer (Hoodie & Shirt đã có addThickCollar trùm kín phía trên)
+    if (isBlazerOuter) {
+      const outerTopIdx = outerMesh.grid.length - 1;
+      const outerTopRim = outerSampled[outerTopIdx];
+      const outerTopGap = Math.max(0.18, outerTopRim.frontGap ?? 0.54);
+      const outerTopInnerRow: number[] = [];
+      for (let j = 0; j <= outerSegs; j++) {
+        const u = j / outerSegs;
+        const th = outerTopGap + u * (Math.PI * 2 - outerTopGap * 2);
+        const [vx, vy, vz] = evalRingPoint(outerTopRim, th, outerSq, 0.86);
+        outerTopInnerRow.push(mb.addVertex(vx, vy, vz));
+      }
+      mb.bridgeEdgeStrip(
+        outerMesh.grid[outerTopIdx],
+        outerTopInnerRow,
+        0,
+        1,
+        0,
+        'outerwearShell',
+        0.002,
+        'outerwear',
+        'outerwear',
+        0.92
+      );
     }
-    mb.bridgeEdgeStrip(
-      outerMesh.grid[outerTopIdx],
-      outerTopInnerRow,
-      0,
-      1,
-      0,
-      'outerwearShell',
-      0.002,
-      'outerwear',
-      'outerwear',
-      0.92
-    );
-
-    // D. Vòng bịt gầm gấu áo khoác (`hemSealRing`, chỉ vẽ khi dot(N, V) > 0.05)
-    //    Khép thẳng từ mép gấu dưới `outerwear` vào bán kính cạp quần/hông với pháp tuyến (0, -1, 0), tối hơn 45%
-    const outerBotRim = outerSampled[0];
-    const outerBotGap = Math.max(0.18, outerBotRim.frontGap ?? 0.34);
-    const outerHemTuckedRing: RingDef = {
-      ...outerBotRim,
-      y: outerBotRim.y + 0.003,
-      rx: Math.max(0.03, outerBotRim.rx * 0.74),
-      rz: Math.max(0.03, outerBotRim.rz * 0.74),
-    };
-    const outerHemInnerRow: number[] = [];
-    for (let j = 0; j <= 24; j++) {
-      const u = j / 24;
-      const th = outerBotGap + u * (Math.PI * 2 - outerBotGap * 2);
-      const [vx, vy, vz] = evalRingPoint(outerHemTuckedRing, th, outerSq);
-      outerHemInnerRow.push(mb.addVertex(vx, vy, vz));
-    }
-    mb.bridgeEdgeStrip(
-      outerMesh.grid[0],
-      outerHemInnerRow,
-      0,
-      -1,
-      0,
-      'outerwearShell',
-      -0.004,
-      'outer_cavity',
-      'outerwear',
-      0.86,
-      false,
-      true
-    );
 
     const sleeveTopR = isHoodieOuter ? 0.084 : isFemale ? 0.067 : 0.076;
     const sleeveEndR = isHoodieOuter || isShirtOuter ? 0.043 : 0.049;
@@ -3188,7 +2883,7 @@ export function buildOutfitMesh3D(
           { y: 1.478, rx: neckRx * 1.32, rz: neckRz * 1.28, frontGap: 0.56, ao: 0.95 },
           { y: 1.522, rx: neckRx * 1.2, rz: neckRz * 1.16, frontGap: 0.6, ao: 1.0 },
         ],
-        18,
+        8,
         'outerwear',
         'outer_lining',
         'outerwear',
@@ -3228,18 +2923,22 @@ export function buildOutfitMesh3D(
       });
 
       // 2 túi kangaroo chia đôi + miệng túi chéo tối màu
-      const pocketRings = outerSampled.slice(1, 4);
+      const pocketRings = [
+        sampleRingAtT(outerSampled, 0.14),
+        sampleRingAtT(outerSampled, 0.3),
+        sampleRingAtT(outerSampled, 0.44),
+      ];
       mb.addConformingPatch(
         pocketRings,
         outerSq,
         (_t, r) => (r.frontGap ?? 0.36) + 0.05,
         (_t, r) => (r.frontGap ?? 0.36) + 0.5,
         0.01,
-        3,
+        1,
         'outerwear',
         'outerwear',
         'outerwearShell',
-        { zBias: 0.014, ao: 1.03, sideBevel: true }
+        { zBias: 0.014, ao: 1.03, sideBevel: false }
       );
       mb.addConformingPatch(
         pocketRings,
@@ -3247,11 +2946,11 @@ export function buildOutfitMesh3D(
         (_t, r) => Math.PI * 2 - ((r.frontGap ?? 0.36) + 0.5),
         (_t, r) => Math.PI * 2 - ((r.frontGap ?? 0.36) + 0.05),
         0.01,
-        3,
+        1,
         'outerwear',
         'outerwear',
         'outerwearShell',
-        { zBias: 0.014, ao: 1.03, sideBevel: true }
+        { zBias: 0.014, ao: 1.03, sideBevel: false }
       );
       const pTop = pocketRings[pocketRings.length - 1];
       const pBot = pocketRings[0];
@@ -3294,18 +2993,22 @@ export function buildOutfitMesh3D(
       });
     } else {
       // Blazer khoác ngoài: 2 ve áo chữ V có khía sắc nét + 2 nắp túi ngang + 2 nút cúc + xẻ tà sau lưng
-      const lapelRings = outerSampled.slice(3, 7);
+      const lapelRings = [
+        sampleRingAtT(outerSampled, 0.42),
+        sampleRingAtT(outerSampled, 0.68),
+        sampleRingAtT(outerSampled, 0.92),
+      ];
       mb.addConformingPatch(
         lapelRings,
         outerSq,
         (_t, r) => r.frontGap ?? 0.42,
         (t, r) => (r.frontGap ?? 0.42) + 0.14 + Math.sin(t * Math.PI * 0.85) * 0.24,
         0.011,
-        3,
+        1,
         'outerwear',
         'outerwear',
         'outerwearShell',
-        { zBias: 0.014, ao: 1.04, sideBevel: true }
+        { zBias: 0.014, ao: 1.04, sideBevel: false }
       );
       mb.addConformingPatch(
         lapelRings,
@@ -3313,11 +3016,11 @@ export function buildOutfitMesh3D(
         (t, r) => Math.PI * 2 - ((r.frontGap ?? 0.42) + 0.14 + Math.sin(t * Math.PI * 0.85) * 0.24),
         (_t, r) => Math.PI * 2 - (r.frontGap ?? 0.42),
         0.011,
-        3,
+        1,
         'outerwear',
         'outerwear',
         'outerwearShell',
-        { zBias: 0.014, ao: 1.04, sideBevel: true }
+        { zBias: 0.014, ao: 1.04, sideBevel: false }
       );
       // Viền ve áo chữ V có khía + nắp túi hông
       ([-1, 1] as const).forEach(s => {
@@ -3395,33 +3098,31 @@ export function buildOutfitMesh3D(
           { y: topLegY, rx: topThighRx, rz: topThighRz, xOff: side * (legSpread - 0.004), ao: 0.86 },
         ];
         mb.loftTube(
-          sampleSplineRings(calfControls, 6),
-          16,
+          sampleSplineRings(calfControls, 3),
+          8,
           'mannequin_leg',
           'bottom',
           partId,
-          { capTop: true, capBottom: true, superEllipse: 0.01 }
+          { capTop: false, capBottom: false, superEllipse: 0.01 }
         );
       });
     }
 
     const waistTopY = 0.896;
 
-    // Cắm sâu khối Cạp quần/Váy lên bên trong thân áo tối thiểu +0.20 đơn vị (Deep Waist Overlap >= +0.18),
+    // Cắm sâu khối Cạp Váy lên bên trong thân áo tối thiểu +0.20 đơn vị (Deep Waist Overlap >= +0.18),
     // thu bán kính nhỏ hơn vòng eo áo ~11-12% để không cộm/lòi ra ngoài, đóng nắp đỉnh kín đặc (`capTop: true`)
     const addDeepWaistPlug = (baseRing: RingDef, sq: number) => {
       if (isSoloBabyTee) return;
       const plugTopY = Math.max(activeTopHemY + 0.2, 1.07);
-      const midY = (baseRing.y + plugTopY) * 0.5;
       const plugRx = isFemale ? 0.104 : 0.136;
       const plugRz = isFemale ? 0.082 : 0.084;
       mb.loftTube(
         [
           { y: baseRing.y - 0.01, rx: baseRing.rx * 0.96, rz: baseRing.rz * 0.96, zOff: baseRing.zOff ?? 0, ao: 0.9 },
-          { y: midY, rx: (baseRing.rx * 0.92 + plugRx) * 0.5, rz: (baseRing.rz * 0.92 + plugRz) * 0.5, zOff: -0.005, ao: 0.86 },
           { y: plugTopY, rx: plugRx, rz: plugRz, zOff: -0.009, ao: 0.82 },
         ],
-        20,
+        12,
         'bottom',
         'bottom',
         'bottomCore',
@@ -3438,21 +3139,25 @@ export function buildOutfitMesh3D(
         { y: 0.835, rx: hipW * 0.94, rz: 0.114, ao: 0.95 },
         { y: waistTopY, rx: waistW * 0.96, rz: 0.094, ao: 0.92 },
       ];
-      const skirtSampled = sampleSplineRings(skirtControls, 7);
-      const skirtOuter = mb.loftTube(skirtSampled, 24, 'bottom', 'bottom', 'bottomCore', {
-        capTop: true,
+      const skirtSampled = sampleSplineRings(skirtControls, 4);
+      const skirtOuter = mb.loftTube(skirtSampled, 14, 'bottom', 'bottom', 'bottomCore', {
+        capTop: isSoloBabyTee,
         superEllipse: 0.012,
       });
       addDeepWaistPlug(skirtSampled[skirtSampled.length - 1], 0.012);
 
       // Lớp lót mặt trong đầy đủ + nắp trần tối màu kín 100% (`capTop: true`) chống nhìn xuyên từ dưới lên!
-      const skirtInnerRings = skirtSampled.slice(0, 6).map(r => ({
+      const skirtInnerRings = [
+        skirtSampled[0],
+        skirtSampled[2],
+        skirtSampled[3],
+      ].map(r => ({
         ...r,
         rx: r.rx * 0.955,
         rz: r.rz * 0.955,
         ao: 0.76,
       }));
-      const skirtInner = mb.loftTube(skirtInnerRings, 24, 'bottom_cavity', 'bottom', 'bottomCore', {
+      const skirtInner = mb.loftTube(skirtInnerRings, 14, 'bottom_cavity', 'bottom', 'bottomCore', {
         zBias: -0.01,
         isDeepCavity: true,
         inward: true,
@@ -3484,21 +3189,24 @@ export function buildOutfitMesh3D(
         { y: 0.815, rx: hipW * 0.96, rz: 0.114, ao: 0.97 },
         { y: waistTopY, rx: waistW * 0.96, rz: 0.094, ao: 0.94 },
       ];
-      const miniSampled = sampleSplineRings(miniControls, 6);
-      const miniOuter = mb.loftTube(miniSampled, 24, 'bottom', 'bottom', 'bottomCore', {
-        capTop: true,
+      const miniSampled = sampleSplineRings(miniControls, 3);
+      const miniOuter = mb.loftTube(miniSampled, 14, 'bottom', 'bottom', 'bottomCore', {
+        capTop: isSoloBabyTee,
         superEllipse: 0.016,
       });
       addDeepWaistPlug(miniSampled[miniSampled.length - 1], 0.016);
 
       // Lớp lót mặt trong đầy đủ + nắp trần tối màu kín 100% (`capTop: true`) chống nhìn xuyên từ dưới lên!
-      const miniInnerRings = miniSampled.slice(0, 5).map(r => ({
+      const miniInnerRings = [
+        miniSampled[0],
+        miniSampled[2],
+      ].map(r => ({
         ...r,
         rx: r.rx * 0.95,
         rz: r.rz * 0.95,
         ao: 0.74,
       }));
-      const miniInner = mb.loftTube(miniInnerRings, 24, 'bottom_cavity', 'bottom', 'bottomCore', {
+      const miniInner = mb.loftTube(miniInnerRings, 14, 'bottom_cavity', 'bottom', 'bottomCore', {
         zBias: -0.01,
         isDeepCavity: true,
         inward: true,
@@ -3527,29 +3235,47 @@ export function buildOutfitMesh3D(
       // Đường xẻ tà ngắn tinh tế ở vạt trước bên trái
       mb.addSurfaceCurve(miniSampled, 0.016, 3, 0.0, 0.36, () => -0.44, 0.004, 'bottomCore', 'bottom', 2.0, 'contrastDark');
     } else {
-      // QUẦN: wide_pants | jeans | shorts — khối hông `bottomCore` cắm sâu lên trong áo (>= +0.20)
-      const pelvisRings = sampleSplineRings(
-        [
-          { y: 0.695, rx: hipW * 0.94, rz: 0.109, ao: 0.9 },
-          { y: 0.775, rx: hipW * 1.01, rz: 0.116, ao: 0.97 },
-          { y: 0.845, rx: (hipW + waistW) * 0.49, rz: 0.106, ao: 0.98 },
-          { y: waistTopY, rx: waistW * 0.95, rz: 0.092, ao: 0.94 },
-        ],
-        4
-      );
-      mb.loftTube(pelvisRings, 24, 'bottom', 'bottom', 'bottomCore', {
-        capTop: true,
-        capBottom: true,
-        capBottomMaterial: 'bottom_cavity',
-        superEllipse: 0.016,
-      });
-      addDeepWaistPlug(pelvisRings[pelvisRings.length - 1], 0.016);
-
+      // QUẦN: wide_pants | jeans | shorts — khối `pelvis` (4 vòng × 16 cạnh) + 2 ống chân liền mạch (Z-sort chung thành 1 khối quần!)
+      // KHÔNG dựng nắp đáy `pelvis` hay khối đen thừa để tránh cắt ngang đầu đùi.
       const isShort = bottomShape === 'shorts';
       const isWide = bottomShape === 'wide_pants';
       const isJeans = bottomShape === 'jeans';
 
-      const maxLegTopRx = Math.min(0.089, hipW - legSpread + 0.004);
+      const pelvisBotRx = isWide ? hipW * 0.94 : hipW * 0.91;
+      const pelvisBotRz = isWide ? 0.104 : 0.102;
+      const pelvisRings = sampleSplineRings(
+        [
+          { y: 0.695, rx: pelvisBotRx, rz: pelvisBotRz, ao: 0.94 },
+          { y: 0.768, rx: hipW * 0.97, rz: 0.111, ao: 0.98 },
+          { y: 0.84, rx: (hipW + waistW) * 0.48, rz: 0.104, ao: 0.99 },
+          { y: waistTopY, rx: waistW * 0.95, rz: 0.092, ao: 0.96 },
+        ],
+        3 // 4 vòng dọc (3 dải quad) × 16 cạnh ngang
+      );
+      // Cạp quần cắm nhẹ +0.06 lên bên trong gấu áo trực tiếp bằng vòng đỉnh thứ 4/5 liền mạch (không tạo ống thừa)
+      const pelvisLoftRings: RingDef[] = isSoloBabyTee
+        ? pelvisRings
+        : [
+            pelvisRings[0],
+            pelvisRings[1],
+            pelvisRings[3],
+            {
+              y: Math.max(waistTopY + 0.04, activeTopHemY + 0.06),
+              rx: pelvisRings[3].rx * 0.91,
+              rz: pelvisRings[3].rz * 0.91,
+              zOff: -0.004,
+              ao: 0.89,
+            },
+          ];
+      mb.loftTube(pelvisLoftRings, 16, 'bottom', 'bottom', 'pelvis', {
+        capTop: true,
+        capBottom: false,
+        superEllipse: 0.016,
+      });
+
+      // Đỉnh trên 2 ống chân nối liền mượt vào bên trong khối `pelvis` (khớp khít biên ngoài hông, giữ dáng tròn tự nhiên)
+      const legTopCenterX = legSpread - 0.008;
+      const maxLegTopRx = Math.min(0.088, pelvisBotRx - legTopCenterX + 0.002);
 
       ([-1, 1] as const).forEach(side => {
         const partId: MeshPartId = side === -1 ? 'leftLeg' : 'rightLeg';
@@ -3557,111 +3283,66 @@ export function buildOutfitMesh3D(
         let bands: number;
 
         if (isShort) {
-          bands = 3;
+          bands = 3; // 4 vòng dọc
           legControls = [
-            { y: 0.54, rx: isFemale ? 0.076 : 0.082, rz: 0.082, xOff: side * legSpread, ao: 0.96 },
-            { y: 0.66, rx: isFemale ? 0.08 : 0.085, rz: 0.088, xOff: side * (legSpread + 0.001), ao: 0.98 },
-            { y: 0.8, rx: maxLegTopRx, rz: 0.096, xOff: side * (legSpread - 0.006), ao: 0.9 },
+            { y: 0.54, rx: isFemale ? 0.075 : 0.081, rz: 0.083, xOff: side * legSpread, ao: 0.96 },
+            { y: 0.65, rx: isFemale ? 0.079 : 0.084, rz: 0.089, xOff: side * (legSpread - 0.002), ao: 0.98 },
+            { y: 0.775, rx: maxLegTopRx, rz: 0.097, xOff: side * legTopCenterX, ao: 0.95 },
           ];
         } else if (isWide) {
-          // Quần ống suông: rộng thẳng tắp từ hông phủ nhẹ lên mu giày!
-          bands = 6;
+          // Quần ống suông: 6 vòng dọc (5 dải) × 14 cạnh ngang — chia đều quad ngắn cho Painter's Algorithm, nhẹ gấp đôi!
+          bands = 5;
           legControls = [
-            { y: 0.062, rx: 0.088, rz: 0.091, xOff: side * (legSpread + 0.003), ao: 0.92 },
-            { y: 0.27, rx: 0.087, rz: 0.091, xOff: side * (legSpread + 0.002), ao: 0.97 },
-            { y: 0.5, rx: 0.088, rz: 0.092, xOff: side * (legSpread + 0.001), ao: 1.0 },
-            { y: 0.66, rx: 0.088, rz: 0.093, xOff: side * (legSpread - 0.002), ao: 0.97 },
-            { y: 0.8, rx: maxLegTopRx, rz: 0.096, xOff: side * (legSpread - 0.006), ao: 0.9 },
+            { y: 0.044, rx: 0.087, rz: 0.092, xOff: side * (legSpread + 0.003), ao: 0.94 },
+            { y: 0.25, rx: 0.087, rz: 0.092, xOff: side * (legSpread + 0.002), ao: 0.98 },
+            { y: 0.48, rx: 0.087, rz: 0.093, xOff: side * legSpread, ao: 1.0 },
+            { y: 0.65, rx: 0.087, rz: 0.095, xOff: side * (legSpread - 0.003), ao: 0.98 },
+            { y: 0.775, rx: maxLegTopRx, rz: 0.098, xOff: side * legTopCenterX, ao: 0.95 },
           ];
         } else {
-          // Quần Jean: ống gọn và ôm thon hơn hẳn quần ống suông, dừng gọn trên cổ giày!
-          bands = 6;
+          // Quần Jean: 6 vòng dọc (5 dải) × 14 cạnh ngang
+          bands = 5;
           legControls = [
-            { y: 0.09, rx: isFemale ? 0.049 : 0.056, rz: isFemale ? 0.053 : 0.06, xOff: side * legSpread, ao: 0.92 },
-            { y: 0.28, rx: isFemale ? 0.058 : 0.066, rz: isFemale ? 0.062 : 0.07, xOff: side * legSpread, ao: 0.97 },
-            { y: 0.5, rx: isFemale ? 0.07 : 0.077, rz: isFemale ? 0.074 : 0.081, xOff: side * legSpread, ao: 1.0 },
-            { y: 0.66, rx: isFemale ? 0.078 : 0.084, rz: isFemale ? 0.082 : 0.089, xOff: side * (legSpread - 0.002), ao: 0.97 },
-            { y: 0.8, rx: maxLegTopRx, rz: 0.096, xOff: side * (legSpread - 0.006), ao: 0.9 },
+            { y: 0.072, rx: isFemale ? 0.049 : 0.056, rz: isFemale ? 0.054 : 0.061, xOff: side * legSpread, ao: 0.94 },
+            { y: 0.27, rx: isFemale ? 0.058 : 0.066, rz: isFemale ? 0.063 : 0.071, xOff: side * legSpread, ao: 0.98 },
+            { y: 0.49, rx: isFemale ? 0.07 : 0.077, rz: isFemale ? 0.075 : 0.082, xOff: side * legSpread, ao: 1.0 },
+            { y: 0.65, rx: isFemale ? 0.078 : 0.084, rz: isFemale ? 0.083 : 0.09, xOff: side * (legSpread - 0.003), ao: 0.98 },
+            { y: 0.775, rx: maxLegTopRx, rz: 0.097, xOff: side * legTopCenterX, ao: 0.95 },
           ];
         }
 
         const sampledLeg = sampleSplineRings(legControls, bands);
-        const legMesh = mb.loftTube(sampledLeg, 16, 'bottom', 'bottom', partId, {
-          capTop: true,
+        mb.loftTube(sampledLeg, 14, 'bottom', 'bottom', partId, {
+          capTop: false,
+          capBottom: false,
           superEllipse: 0.015,
         });
 
-        // Đóng nắp đáy tối màu (`bottom_cavity`) thụt nhẹ vào trong gấu quần cho CẢ 3 dáng quần (`wide_pants`, `jeans`, `shorts`)
-        const hem = sampledLeg[0];
-        const innerCuffH = isShort ? 0.055 : 0.042;
-        const innerTopR = sampleRingAtT(
-          sampledLeg,
-          Math.min(0.28, innerCuffH / Math.max(0.12, sampledLeg[sampledLeg.length - 1].y - hem.y))
-        );
-        const legCuffInner = mb.loftTube(
-          [
-            {
-              y: hem.y + 0.004,
-              rx: Math.max(0.018, hem.rx * 0.9),
-              rz: Math.max(0.018, hem.rz * 0.9),
-              xOff: hem.xOff,
-              zOff: hem.zOff,
-              ao: 0.74,
-            },
-            {
-              y: Math.max(hem.y + 0.028, innerTopR.y),
-              rx: Math.max(0.016, innerTopR.rx * 0.78),
-              rz: Math.max(0.016, innerTopR.rz * 0.78),
-              xOff: innerTopR.xOff,
-              zOff: innerTopR.zOff,
-              ao: 0.58,
-            },
-          ],
-          16,
-          'bottom_cavity',
-          'bottom',
-          partId,
-          { zBias: -0.008, inward: true, capTop: true, superEllipse: 0.015 }
-        );
-        mb.bridgeEdgeStrip(
-          [...legMesh.grid[0], legMesh.grid[0][0]],
-          [...legCuffInner.grid[0], legCuffInner.grid[0][0]],
-          0,
-          -1,
-          0,
-          partId,
-          0.002,
-          'bottom',
-          'bottom',
-          0.88
-        );
-
-        // ----- CHI TIẾT NHẬN DIỆN TỪNG LOẠI ỐNG QUẦN -----
+        // ----- CHI TIẾT NHẬN DIỆN TỪNG LOẠI ỐNG QUẦN (TINH TẾ, DỊU MẮT) -----
         if (isWide) {
-          // Đường ly thẳng đứng sắc nét chạy dọc chính giữa mặt trước mỗi ống quần suông!
-          mb.addSurfaceCurve(sampledLeg, 0.015, 6, 0.04, 0.94, () => 0, 0.003, partId, 'bottom', 1.35, 'seamDark');
-          mb.addSurfaceCurve(sampledLeg, 0.015, 6, 0.04, 0.94, () => 0.08, 0.003, partId, 'bottom', 1.0, 'seamLight');
-          mb.addCircumferentialSeam(sampleRingAtT(sampledLeg, 0.03), 0.015, 0.002, partId, 'bottom', 1.0, 'seamDark');
+          // Đường ly thẳng đứng mảnh dịu dọc chính giữa mặt trước mỗi ống quần suông (bỏ viền ngang gấu chói)
+          mb.addSurfaceCurve(sampledLeg, 0.015, 7, 0.04, 0.9, () => 0, 0.0025, partId, 'bottom', 1.0, 'seamDark');
+          mb.addSurfaceCurve(sampledLeg, 0.015, 7, 0.04, 0.9, () => 0.07, 0.0025, partId, 'bottom', 0.75, 'seamLight');
         } else if (isJeans) {
-          // Đường chỉ sườn ngoài dọc ống quần Jean + viền gấu denim sắc nét
+          // Đường chỉ sườn ngoài dọc ống quần Jean + viền gấu denim mảnh
           const outerSideTheta = side === 1 ? Math.PI * 0.5 : -Math.PI * 0.5;
-          mb.addSurfaceCurve(sampledLeg, 0.015, 6, 0.03, 0.95, () => outerSideTheta, 0.0025, partId, 'bottom', 1.35, 'seamDark');
-          mb.addCircumferentialSeam(sampleRingAtT(sampledLeg, 0.04), 0.015, 0.0025, partId, 'bottom', 1.35, 'seamDark');
+          mb.addSurfaceCurve(sampledLeg, 0.015, 7, 0.03, 0.94, () => outerSideTheta, 0.0025, partId, 'bottom', 1.05, 'seamDark');
+          mb.addCircumferentialSeam(sampleRingAtT(sampledLeg, 0.03), 0.015, 0.002, partId, 'bottom', 0.95, 'seamDark');
         } else if (isShort) {
-          // Viền gấu quần Short gọn gàng
-          mb.addCircumferentialSeam(sampleRingAtT(sampledLeg, 0.08), 0.015, 0.002, partId, 'bottom', 1.2, 'seamDark');
+          // Viền gấu quần Short mảnh gọn
+          mb.addCircumferentialSeam(sampleRingAtT(sampledLeg, 0.06), 0.015, 0.002, partId, 'bottom', 0.95, 'seamDark');
         }
       });
 
-      // ----- CHI TIẾT HÔNG / CẠP QUẦN (GẮN VÀO `bottomCore` ĐỂ LUÔN NẰM DƯỚI GẤU ÁO) -----
-      mb.addCircumferentialSeam(sampleRingAtT(pelvisRings, 0.84), 0.016, 0.0025, 'bottomCore', 'bottom', 1.3, 'seamDark');
+      // ----- CHI TIẾT HÔNG / CẠP QUẦN (GẮN VÀO `pelvis` ĐỂ LUÔN NẰM DƯỚI GẤU ÁO) -----
+      mb.addCircumferentialSeam(sampleRingAtT(pelvisRings, 0.84), 0.016, 0.0025, 'pelvis', 'bottom', 1.05, 'seamDark');
 
       if (isJeans) {
         // 1. Nút quần kim loại + đường khóa kéo J-stitch mặt trước
         const btnR = sampleRingAtT(pelvisRings, 0.86);
-        mb.addDetailDot('bottomCore', 'bottom', evalRingPoint(btnR, 0, 0.016, 1.0, 0.005), [0, 0, 1], 0.007, 'buckle');
+        mb.addDetailDot('pelvis', 'bottom', evalRingPoint(btnR, 0, 0.016, 1.0, 0.005), [0, 0, 1], 0.007, 'buckle');
         mb.addDetailLine(
-          'bottomCore',
+          'pelvis',
           'bottom',
           [
             evalRingPoint(sampleRingAtT(pelvisRings, 0.82), 0.06, 0.016, 1.0, 0.004),
@@ -3669,14 +3350,14 @@ export function buildOutfitMesh3D(
             evalRingPoint(sampleRingAtT(pelvisRings, 0.2), 0.01, 0.016, 1.0, 0.004),
           ],
           [0, 0, 1],
-          1.35,
+          1.15,
           'seamDark'
         );
 
         // 2. Hai túi cong mặt trước + con đỉa cạp quần
         ([-1, 1] as const).forEach(s => {
           mb.addDetailLine(
-            'bottomCore',
+            'pelvis',
             'bottom',
             [
               evalRingPoint(sampleRingAtT(pelvisRings, 0.8), s * 0.44, 0.016, 1.0, 0.004),
@@ -3684,19 +3365,19 @@ export function buildOutfitMesh3D(
               evalRingPoint(sampleRingAtT(pelvisRings, 0.42), s * 0.86, 0.016, 1.0, 0.004),
             ],
             safeNormalize(s * 0.55, 0, 0.83),
-            1.4,
+            1.15,
             'seamDark'
           );
           // Con đỉa cạp quần mặt trước
           mb.addDetailLine(
-            'bottomCore',
+            'pelvis',
             'bottom',
             [
               evalRingPoint(sampleRingAtT(pelvisRings, 0.96), s * 0.36, 0.016, 1.0, 0.005),
               evalRingPoint(sampleRingAtT(pelvisRings, 0.78), s * 0.36, 0.016, 1.0, 0.005),
             ],
             safeNormalize(s * 0.32, 0, 0.94),
-            1.7,
+            1.4,
             'contrastDark'
           );
         });
@@ -3711,7 +3392,7 @@ export function buildOutfitMesh3D(
           const thOut = Math.PI + s * 0.68;
           const pNorm = safeNormalize(Math.sin(thMid), 0, Math.cos(thMid));
           mb.addDetailLine(
-            'bottomCore',
+            'pelvis',
             'bottom',
             [
               evalRingPoint(rTop, thIn, 0.016, 1.0, 0.004),
@@ -3722,13 +3403,13 @@ export function buildOutfitMesh3D(
               evalRingPoint(rTop, thIn, 0.016, 1.0, 0.004),
             ],
             pNorm,
-            1.4,
+            1.15,
             'seamDark'
           );
         });
       } else {
-        // Đường khóa giữa gọn gàng cho Quần suông & Quần Short
-        mb.addSurfaceCurve(pelvisRings, 0.016, 3, 0.22, 0.82, () => 0, 0.003, 'bottomCore', 'bottom', 1.15, 'seamDark');
+        // Đường khóa giữa mảnh gọn cho Quần suông & Quần Short
+        mb.addSurfaceCurve(pelvisRings, 0.016, 3, 0.22, 0.82, () => 0, 0.0025, 'pelvis', 'bottom', 1.0, 'seamDark');
       }
     }
   }

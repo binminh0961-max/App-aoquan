@@ -319,7 +319,7 @@ export const CameraPickerScreen: React.FC = () => {
           ? `Món 2 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
           : 'Đang cập nhật Món 1',
         guideText: `Chĩa camera vào Món 1 (${SLOT_SHORT_LABELS[targetSlot]}) để cập nhật màu`,
-        ctaLabel: 'Cập nhật & Chấm điểm →',
+        ctaLabel: 'Cập nhật',
       };
     }
 
@@ -333,7 +333,7 @@ export const CameraPickerScreen: React.FC = () => {
           ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
           : 'Đang cập nhật Món 2',
         guideText: `Chĩa camera vào Món 2 (${SLOT_SHORT_LABELS[targetSlot]}) để cập nhật màu`,
-        ctaLabel: 'Cập nhật & Chấm điểm →',
+        ctaLabel: 'Cập nhật',
       };
     }
 
@@ -346,7 +346,7 @@ export const CameraPickerScreen: React.FC = () => {
         ? `Món 1 (${SLOT_SHORT_LABELS[kept.slot]}): ${shortColorName(kept.color.name)}`
         : 'Đã chọn Món 1',
       guideText: `Chĩa camera vào Món 2 (${SLOT_SHORT_LABELS[nextSlot]}) để chấm điểm`,
-      ctaLabel: 'Chấm điểm 2 món này →',
+      ctaLabel: 'Chấm điểm',
     };
   }, [compareContext]);
 
@@ -713,7 +713,13 @@ export const CameraPickerScreen: React.FC = () => {
                 activeOpacity={0.85}
               >
                 <Ionicons name="refresh-outline" size={18} color="#374151" />
-                <Text style={styles.retakeCardBtnText}>Chụp lại</Text>
+                <Text
+                  style={styles.retakeCardBtnText}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  Chụp lại
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -721,7 +727,11 @@ export const CameraPickerScreen: React.FC = () => {
                 onPress={handleConfirmMatch}
                 activeOpacity={0.88}
               >
-                <Text style={styles.primaryActionText}>
+                <Text
+                  style={styles.primaryActionText}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
                   {compareBannerInfo
                     ? compareBannerInfo.ctaLabel
                     : 'Phối đồ với màu này →'}
@@ -1136,7 +1146,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#F3F4F6',
     borderRadius: 14,
-    paddingVertical: 14,
+    minHeight: 46,
+    paddingVertical: 12,
     paddingHorizontal: 16,
   },
   retakeCardBtnText: {
@@ -1144,12 +1155,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     marginLeft: 4,
+    includeFontPadding: false,
   },
   primaryActionButton: {
     flex: 1,
+    minWidth: 0,
     backgroundColor: '#111827',
     borderRadius: 14,
-    paddingVertical: 14,
+    minHeight: 46,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1157,6 +1172,8 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   compareSecondBtn: {
     marginTop: 10,
@@ -1165,7 +1182,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#F9FAFB',
     borderRadius: 14,
-    paddingVertical: 12,
+    minHeight: 46,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
     borderWidth: 1.5,
     borderColor: '#111827',
   },

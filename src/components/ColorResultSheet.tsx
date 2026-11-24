@@ -148,7 +148,13 @@ export const ColorResultSheet: React.FC<Props> = ({
         onPress={onConfirm}
         activeOpacity={0.88}
       >
-        <Text style={styles.confirmButtonText}>{primaryButtonLabel}</Text>
+        <Text
+          style={styles.confirmButtonText}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
+          {primaryButtonLabel}
+        </Text>
       </TouchableOpacity>
 
       {/* Secondary Action Button (e.g. So với món thứ 2) */}
@@ -164,7 +170,13 @@ export const ColorResultSheet: React.FC<Props> = ({
             color="#111827"
             style={styles.secondaryButtonIcon}
           />
-          <Text style={styles.secondaryButtonText}>{secondaryButtonLabel}</Text>
+          <Text
+            style={styles.secondaryButtonText}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {secondaryButtonLabel}
+          </Text>
         </TouchableOpacity>
       )}
     </View>
@@ -322,7 +334,9 @@ const styles = StyleSheet.create({
   confirmButton: {
     backgroundColor: '#111827',
     borderRadius: 14,
-    paddingVertical: 15,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
     ...Platform.select({
@@ -341,7 +355,9 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   secondaryButton: {
     marginTop: 10,
@@ -350,7 +366,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#F9FAFB',
     borderRadius: 14,
-    paddingVertical: 12,
+    minHeight: 46,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
     borderWidth: 1.5,
     borderColor: '#111827',
   },
@@ -361,5 +379,7 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 14,
     fontWeight: '700',
+    textAlign: 'center',
+    includeFontPadding: false,
   },
 });
