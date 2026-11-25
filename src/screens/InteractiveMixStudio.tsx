@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
+import { RouteProp, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
@@ -23,9 +23,12 @@ import Outfit3DViewer, {
 import { LookbookItemCard } from '../components/LookbookItemCard';
 import { ColorPaletteSheet } from '../components/ColorPaletteSheet';
 import { SkinUndertoneSheet } from '../components/SkinUndertoneSheet';
+import { ShopRecommendationSheet } from '../components/ShopRecommendationSheet';
+import { RewardedUnlockModal } from '../components/RewardedUnlockModal';
 import {
   initStudioOutfit,
   initStudioOutfitFromPreset,
+  initStudioOutfitFromSaved,
   toggleLayeringMode,
   shuffleOutfitColors,
   remixOutfitForContext,
@@ -36,6 +39,7 @@ import {
   switchGender,
   applyScannedColorToSlot,
   generateOutfitAdvice,
+  getSilhouetteOption,
   getTopSilhouettes,
   OUTERWEAR_SILHOUETTES,
   getBottomSilhouettes,
@@ -51,7 +55,24 @@ import {
   OccasionMode,
   SkinUndertone,
 } from '../types/outfit';
-import { loadUserUndertone, saveUserUndertone } from '../services/userPreferences';
+import {
+  getCachedUserUndertone,
+  loadUserUndertone,
+  saveUserUndertone,
+} from '../services/userPreferences';
+import {
+  buildOutfitSignature,
+  buildSavedOutfitDraftFromStudio,
+  getCachedSavedOutfits,
+  loadSavedOutfits,
+  saveOutfitToLookbook,
+} from '../services/lookbookStorage';
+import { AffiliateQuery } from '../services/affiliateService';
+import {
+  getCachedMonetizationState,
+  loadMonetizationState,
+  MonetizationState,
+} from '../services/monetizationService';
 import { FashionColor, FASHION_COLORS } from '../constants/fashionColors';
 import { RootStackParamList } from '../../App';
 
@@ -104,18 +125,66 @@ export const InteractiveMixStudio: React.FC = () => {
   const baseColor: FashionColor = route.params?.baseColor || FASHION_COLORS[4];
   const initialRole: 'top' | 'bottom' = route.params?.baseRole || 'top';
   const initialPresetOutfit = route.params?.initialPresetOutfit;
+  const loadSavedOutfit = route.params?.loadSavedOutfit;
 
-  // State chính của Studio (khởi tạo từ preset 2 món nếu có, giữ nguyên luồng 1 màu như cũ)
+  // State chính của Studio (hỗ trợ mở từ Tủ đồ đã lưu, từ MatchChecker preset, hoặc 1 màu gốc)
   const [studioState, setStudioState] = useState<StudioOutfitState>(() =>
-    initialPresetOutfit
+    loadSavedOutfit
+      ? initStudioOutfitFromSaved(loadSavedOutfit, getCachedUserUndertone())
+      : initialPresetOutfit
       ? initStudioOutfitFromPreset(initialPresetOutfit, baseColor)
       : initStudioOutfit(baseColor, initialRole, 'male')
   );
   const studioStateRef = useRef<StudioOutfitState>(studioState);
   studioStateRef.current = studioState;
 
+  // Khôi phục lại bộ đồ khi điều hướng vào Studio với một bộ đã lưu từ Tủ đồ / So sánh
+  const lastLoadedSavedRef = useRef(loadSavedOutfit);
+  useEffect(() => {
+    if (!loadSavedOutfit) return;
+    if (lastLoadedSavedRef.current === loadSavedOutfit) return;
+    lastLoadedSavedRef.current = loadSavedOutfit;
+    const restored = initStudioOutfitFromSaved(
+      loadSavedOutfit,
+      studioStateRef.current.undertone
+    );
+    setStudioState(restored);
+    setHistory([]);
+    setActiveSlot(restored.sourceSlot);
+  }, [loadSavedOutfit]);
+
   // Lịch sử Hoàn tác (Undo Stack, tối đa 15 bước gần nhất)
   const [history, setHistory] = useState<StudioOutfitState[]>([]);
+
+  // Trạng thái Tủ đồ cục bộ (badge số lượng + danh sách signature + giới hạn ô Tủ đồ)
+  const [savedCount, setSavedCount] = useState<number>(
+    () => getCachedSavedOutfits().length
+  );
+  const [savedSignatures, setSavedSignatures] = useState<Set<string>>(
+    () => new Set(getCachedSavedOutfits().map(o => o.signature))
+  );
+  const [maxWardrobeSlots, setMaxWardrobeSlots] = useState<number>(
+    () => getCachedMonetizationState().maxWardrobeSlots
+  );
+  const [unlockModalVisible, setUnlockModalVisible] = useState<boolean>(false);
+  const [shopSheetVisible, setShopSheetVisible] = useState<boolean>(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      Promise.all([loadSavedOutfits(), loadMonetizationState()]).then(
+        ([list, monetState]) => {
+          if (!active) return;
+          setSavedCount(list.length);
+          setSavedSignatures(new Set(list.map(o => o.signature)));
+          setMaxWardrobeSlots(monetState.maxWardrobeSlots);
+        }
+      );
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
   // Gu phối màu (Tất cả / Trung tính / Thanh lịch / Nổi bật)
   const [harmonyMode, setHarmonyMode] = useState<StyleHarmonyMode>('all');
@@ -133,8 +202,8 @@ export const InteractiveMixStudio: React.FC = () => {
       if (cancelled || !saved) return;
       setStudioState(prev => {
         if (prev.undertone === saved) return prev;
-        // Nếu mở từ MatchChecker (initialPresetOutfit), giữ nguyên màu preset đã chọn và chỉ cập nhật undertone
-        if (initialPresetOutfit) {
+        // Nếu mở từ MatchChecker hoặc Tủ đồ đã lưu, giữ nguyên bộ màu đã chọn và chỉ cập nhật undertone
+        if (initialPresetOutfit || loadSavedOutfit) {
           return { ...prev, undertone: saved };
         }
         return remixOutfitForContext(prev, { undertone: saved }, 'all');
@@ -143,22 +212,43 @@ export const InteractiveMixStudio: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [initialPresetOutfit]);
+  }, [initialPresetOutfit, loadSavedOutfit]);
 
-  // Toast gọn nhẹ tự ẩn sau 2 giây
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  // Toast gọn nhẹ (hỗ trợ nút hành động nhanh như "Xem →" / "Mở Tủ đồ")
+  const [toastState, setToastState] = useState<{
+    message: string;
+    actionLabel?: string;
+    onAction?: () => void;
+    variant?: 'top' | 'dock';
+  } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = useCallback((msg: string) => {
-    setToastMessage(msg);
-    if (toastTimerRef.current !== null) {
-      clearTimeout(toastTimerRef.current);
-    }
-    toastTimerRef.current = setTimeout(() => {
-      setToastMessage(null);
-      toastTimerRef.current = null;
-    }, 2000);
-  }, []);
+  const showToast = useCallback(
+    (
+      msg: string,
+      options?: {
+        actionLabel?: string;
+        onAction?: () => void;
+        durationMs?: number;
+        variant?: 'top' | 'dock';
+      }
+    ) => {
+      setToastState({
+        message: msg,
+        actionLabel: options?.actionLabel,
+        onAction: options?.onAction,
+        variant: options?.variant ?? 'top',
+      });
+      if (toastTimerRef.current !== null) {
+        clearTimeout(toastTimerRef.current);
+      }
+      toastTimerRef.current = setTimeout(() => {
+        setToastState(null);
+        toastTimerRef.current = null;
+      }, options?.durationMs ?? 2000);
+    },
+    []
+  );
 
   useEffect(() => {
     return () => {
@@ -170,7 +260,11 @@ export const InteractiveMixStudio: React.FC = () => {
 
   // Món đang chọn để chỉnh phom dáng / màu sắc
   const [activeSlot, setActiveSlot] = useState<OutfitSlotId>(
-    initialPresetOutfit?.sourceSlot || initialRole
+    loadSavedOutfit
+      ? loadSavedOutfit.isLayering && loadSavedOutfit.items.outerwear
+        ? 'outerwear'
+        : 'top'
+      : initialPresetOutfit?.sourceSlot || initialRole
   );
 
   // Điều khiển góc nhìn 3D
@@ -414,9 +508,116 @@ export const InteractiveMixStudio: React.FC = () => {
     setZoomState(prev => ({ dir, nonce: prev.nonce + 1 }));
   }, []);
 
-  const handleSaveOutfit = useCallback(() => {
-    showToast('Tính năng Lưu tủ đồ đang được hoàn thiện ở bước tiếp theo');
-  }, [showToast]);
+  const currentOutfitSignature = useMemo(
+    () =>
+      buildOutfitSignature({
+        gender: styleType,
+        isLayering,
+        items: {
+          top: { colorId: slots.top.color.id, silhouette: slots.top.silhouette },
+          outerwear: isLayering
+            ? {
+                colorId: slots.outerwear.color.id,
+                silhouette: slots.outerwear.silhouette,
+              }
+            : undefined,
+          bottom: {
+            colorId: slots.bottom.color.id,
+            silhouette: slots.bottom.silhouette,
+          },
+          shoes: {
+            colorId: slots.shoes.color.id,
+            silhouette: slots.shoes.silhouette,
+          },
+        },
+      }),
+    [styleType, isLayering, slots]
+  );
+
+  const isCurrentOutfitSaved = savedSignatures.has(currentOutfitSignature);
+
+  const handleOpenLookbook = useCallback(() => {
+    setToastState(null);
+    navigation.navigate('Lookbook');
+  }, [navigation]);
+
+  const commitSaveStudioOutfit = useCallback(
+    async (customSuccessMessage?: string) => {
+      const draft = buildSavedOutfitDraftFromStudio(studioStateRef.current);
+      const { list, isDuplicate } = await saveOutfitToLookbook(draft);
+      setSavedCount(list.length);
+      setSavedSignatures(new Set(list.map(o => o.signature)));
+
+      if (customSuccessMessage) {
+        showToast(customSuccessMessage, {
+          actionLabel: 'Xem →',
+          onAction: handleOpenLookbook,
+          durationMs: 2600,
+          variant: 'dock',
+        });
+      } else if (isDuplicate) {
+        showToast('Bộ này đã có trong Tủ đồ', {
+          actionLabel: 'Mở Tủ đồ',
+          onAction: handleOpenLookbook,
+          durationMs: 2500,
+          variant: 'dock',
+        });
+      } else {
+        showToast('Đã lưu vào Tủ đồ', {
+          actionLabel: 'Xem →',
+          onAction: handleOpenLookbook,
+          durationMs: 2500,
+          variant: 'dock',
+        });
+      }
+    },
+    [handleOpenLookbook, showToast]
+  );
+
+  const handleSaveOutfit = useCallback(async () => {
+    const draft = buildSavedOutfitDraftFromStudio(studioStateRef.current);
+    const [currentList, monetState] = await Promise.all([
+      loadSavedOutfits(),
+      loadMonetizationState(),
+    ]);
+    setSavedCount(currentList.length);
+    setSavedSignatures(new Set(currentList.map(o => o.signature)));
+    setMaxWardrobeSlots(monetState.maxWardrobeSlots);
+
+    const isDuplicate = currentList.some(o => o.signature === draft.signature);
+    if (!isDuplicate && currentList.length >= monetState.maxWardrobeSlots) {
+      setUnlockModalVisible(true);
+      return;
+    }
+
+    await commitSaveStudioOutfit();
+  }, [commitSaveStudioOutfit]);
+
+  const handleWardrobeUnlocked = useCallback(
+    async (nextState: MonetizationState) => {
+      setMaxWardrobeSlots(nextState.maxWardrobeSlots);
+      setUnlockModalVisible(false);
+      await commitSaveStudioOutfit('Đã mở thêm 3 ô & lưu bộ đồ!');
+    },
+    [commitSaveStudioOutfit]
+  );
+
+  const activeShopQuery = useMemo<AffiliateQuery>(() => {
+    const activeItem = slots[activeSlot];
+    return {
+      gender: styleType,
+      slot: activeSlot,
+      silhouette: activeItem.silhouette,
+      colorId: activeItem.color.id,
+      colorName: activeItem.color.name,
+      colorFamily: activeItem.color.category,
+    };
+  }, [activeSlot, slots, styleType]);
+
+  const activeShopItemLabel = useMemo(() => {
+    const activeItem = slots[activeSlot];
+    return getSilhouetteOption(activeItem.silhouette).label;
+  }, [activeSlot, slots]);
 
   const activeSlotDisplayLabel = useMemo(() => {
     const item = slots[activeSlot];
@@ -519,23 +720,41 @@ export const InteractiveMixStudio: React.FC = () => {
             </TouchableOpacity>
           </View>
 
-          {/* Nút gạt + Áo khoác dạng pill tối giản */}
-          <TouchableOpacity
-            style={[styles.layerPillBtn, isLayering && styles.layerPillBtnActive]}
-            onPress={handleToggleLayering}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name={isLayering ? 'layers' : 'layers-outline'}
-              size={14}
-              color={isLayering ? '#FFFFFF' : '#111827'}
-            />
-            <Text
-              style={[styles.layerPillText, isLayering && styles.layerPillTextActive]}
+          {/* Nhóm nút phải: + Áo khoác & Tủ đồ (kèm badge số lượng) */}
+          <View style={styles.topRightGroup}>
+            <TouchableOpacity
+              style={[styles.layerPillBtn, isLayering && styles.layerPillBtnActive]}
+              onPress={handleToggleLayering}
+              activeOpacity={0.8}
             >
-              + Áo khoác
-            </Text>
-          </TouchableOpacity>
+              <Ionicons
+                name={isLayering ? 'layers' : 'layers-outline'}
+                size={13.5}
+                color={isLayering ? '#FFFFFF' : '#111827'}
+              />
+              <Text
+                style={[styles.layerPillText, isLayering && styles.layerPillTextActive]}
+              >
+                + Khoác
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.wardrobeHeaderBtn}
+              onPress={handleOpenLookbook}
+              activeOpacity={0.78}
+              accessibilityLabel={`Mở Tủ đồ cá nhân (${savedCount} bộ)`}
+            >
+              <Ionicons name="shirt-outline" size={17} color="#111827" />
+              {savedCount > 0 && (
+                <View style={styles.wardrobeBadge}>
+                  <Text style={styles.wardrobeBadgeText}>
+                    {savedCount > 99 ? '99+' : savedCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Hàng điều khiển góc nhìn 3D: Trước | Nghiêng | Sau | 360° & Zoom */}
@@ -636,6 +855,33 @@ export const InteractiveMixStudio: React.FC = () => {
             onUnlockAll={handleUnlockAll}
           />
         </View>
+
+        {/* Thanh Toast lưu Tủ đồ nổi gọn ngay phía trên Bottom Dock trong 2.5s */}
+        {toastState && toastState.variant === 'dock' && (
+          <View style={styles.dockToastOverlay} pointerEvents="box-none">
+            <View style={styles.toastPill}>
+              <Ionicons
+                name="bookmark"
+                size={14}
+                color="#FFFFFF"
+              />
+              <Text style={styles.toastText} numberOfLines={1}>
+                {toastState.message}
+              </Text>
+              {toastState.actionLabel && toastState.onAction && (
+                <TouchableOpacity
+                  style={styles.toastActionBtn}
+                  onPress={toastState.onAction}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.toastActionText}>
+                    {toastState.actionLabel}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
       </View>
 
       {/* 3. BOTTOM SHEET / DOCK TRẮNG BO GÓC TRÊN */}
@@ -896,7 +1142,7 @@ export const InteractiveMixStudio: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Thanh chọn phom dáng (Silhouette Picker) + Tinh chỉnh sắc độ nhanh + Nút '+' mở đủ 46 màu */}
+        {/* Thanh chọn phom dáng (Silhouette Picker) + Nút Tìm mẫu + Tinh chỉnh sắc độ nhanh + Nút '+' mở đủ 46 màu */}
         <View style={styles.pickerHeaderRow}>
           <View style={styles.activeSlotTitleRow}>
             <View
@@ -905,9 +1151,21 @@ export const InteractiveMixStudio: React.FC = () => {
                 { backgroundColor: slots[activeSlot].color.hex },
               ]}
             />
-            <Text style={styles.activeSlotHeading}>
+            <Text style={styles.activeSlotHeading} numberOfLines={1}>
               {activeSlotDisplayLabel}
             </Text>
+
+            <TouchableOpacity
+              style={styles.findSamplePill}
+              onPress={() => setShopSheetVisible(true)}
+              activeOpacity={0.8}
+              hitSlop={{ top: 5, bottom: 5, left: 4, right: 4 }}
+              accessibilityLabel={`Tìm mẫu ${activeSlotDisplayLabel} trên Shopee và TikTok Shop`}
+            >
+              <Text style={styles.findSamplePillText} numberOfLines={1}>
+                Tìm mẫu ↗
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.quickSwatchRow}>
@@ -1000,22 +1258,31 @@ export const InteractiveMixStudio: React.FC = () => {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.dockSecondaryBtn}
+            style={[
+              styles.dockSecondaryBtn,
+              isCurrentOutfitSaved && styles.dockBookmarkBtnSaved,
+            ]}
             onPress={handleSaveOutfit}
             activeOpacity={0.78}
-            accessibilityLabel="Lưu tủ đồ"
+            accessibilityLabel={
+              isCurrentOutfitSaved ? 'Đã lưu trong Tủ đồ' : 'Lưu tủ đồ'
+            }
           >
-            <Ionicons name="bookmark-outline" size={18} color="#111827" />
+            <Ionicons
+              name={isCurrentOutfitSaved ? 'bookmark' : 'bookmark-outline'}
+              size={18}
+              color={isCurrentOutfitSaved ? '#FFFFFF' : '#111827'}
+            />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Thông báo Toast nổi tự ẩn sau 2 giây */}
-      {toastMessage && (
+      {/* Thông báo Toast nổi tự ẩn (trên cùng cho các nhắc nhở nhanh khác) */}
+      {toastState && toastState.variant !== 'dock' && (
         <View style={styles.toastOverlay} pointerEvents="none">
           <View style={styles.toastPill}>
             <Ionicons name="information-circle-outline" size={15} color="#FFFFFF" />
-            <Text style={styles.toastText}>{toastMessage}</Text>
+            <Text style={styles.toastText}>{toastState.message}</Text>
           </View>
         </View>
       )}
@@ -1037,6 +1304,26 @@ export const InteractiveMixStudio: React.FC = () => {
         selectedUndertone={undertone}
         onSelectUndertone={handleSelectUndertone}
         onClose={() => setUndertoneSheetVisible(false)}
+      />
+
+      {/* Modal Bottom Sheet gợi ý mua sắm Shopee & TikTok Shop cho món đang chọn */}
+      <ShopRecommendationSheet
+        visible={shopSheetVisible}
+        query={activeShopQuery}
+        placement="studio"
+        colorHex={slots[activeSlot].color.hex}
+        itemDisplayLabel={activeShopItemLabel}
+        onClose={() => setShopSheetVisible(false)}
+      />
+
+      {/* Modal mở khóa thêm +3 ô Tủ đồ (Rewarded Ad) khi Tủ đồ đầy */}
+      <RewardedUnlockModal
+        visible={unlockModalVisible}
+        savedCount={savedCount}
+        maxWardrobeSlots={maxWardrobeSlots}
+        mode="full_gate"
+        onClose={() => setUnlockModalVisible(false)}
+        onUnlocked={handleWardrobeUnlocked}
       />
     </View>
   );
@@ -1076,7 +1363,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.65)',
     height: 36,
     padding: 3,
-    width: 128,
+    width: 112,
   },
   segmentBtn: {
     flex: 1,
@@ -1098,12 +1385,17 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
+  topRightGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   layerPillBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     height: 36,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     borderRadius: 18,
     backgroundColor: 'rgba(255, 255, 255, 0.56)',
     borderWidth: 1,
@@ -1114,14 +1406,46 @@ const styles = StyleSheet.create({
     borderColor: '#111827',
   },
   layerPillText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#111827',
-    marginLeft: 5,
+    marginLeft: 4,
     includeFontPadding: false,
   },
   layerPillTextActive: {
     color: '#FFFFFF',
+  },
+  wardrobeHeaderBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.62)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.78)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  wardrobeBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 8.5,
+    paddingHorizontal: 4,
+    backgroundColor: '#111827',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wardrobeBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    fontVariant: ['tabular-nums'],
+    includeFontPadding: false,
   },
   cameraToolbar: {
     flexDirection: 'row',
@@ -1441,6 +1765,9 @@ const styles = StyleSheet.create({
   activeSlotTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+    marginRight: 6,
   },
   activeSlotMiniDot: {
     width: 10,
@@ -1449,21 +1776,40 @@ const styles = StyleSheet.create({
     marginRight: 6,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.18)',
+    flexShrink: 0,
   },
   activeSlotHeading: {
     fontSize: 12,
     fontWeight: '700',
     color: '#111827',
+    flexShrink: 1,
+  },
+  findSamplePill: {
+    marginLeft: 6,
+    paddingHorizontal: 7.5,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    flexShrink: 0,
+  },
+  findSamplePillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#111827',
+    includeFontPadding: false,
   },
   quickSwatchRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
   },
   quickSwatchDot: {
     width: 18,
     height: 18,
     borderRadius: 9,
-    marginLeft: 6,
+    marginLeft: 5,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.16)',
   },
@@ -1523,6 +1869,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  dockBookmarkBtnSaved: {
+    backgroundColor: '#111827',
+  },
   dockSecondaryBtnDisabled: {
     opacity: 0.35,
   },
@@ -1555,13 +1904,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 40,
   },
+  dockToastOverlay: {
+    position: 'absolute',
+    bottom: 10,
+    left: 12,
+    right: 12,
+    alignItems: 'center',
+    zIndex: 45,
+  },
   toastPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(17, 24, 39, 0.92)',
+    backgroundColor: 'rgba(17, 24, 39, 0.94)',
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 20,
+    borderRadius: 22,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.22,
@@ -1573,6 +1930,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     marginLeft: 6,
+    flexShrink: 1,
+  },
+  toastActionBtn: {
+    marginLeft: 10,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  toastActionText: {
+    color: '#111827',
+    fontSize: 11.5,
+    fontWeight: '800',
   },
 });
 

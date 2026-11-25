@@ -204,7 +204,7 @@ export const CameraPickerScreen: React.FC = () => {
   };
 
   const handleWardrobe = () => {
-    showToast('Tính năng Tủ đồ sẽ mở ở giai đoạn kế tiếp');
+    navigation.navigate('Lookbook');
   };
 
   const openImagePicker = async () => {

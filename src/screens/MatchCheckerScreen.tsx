@@ -1,5 +1,5 @@
 // src/screens/MatchCheckerScreen.tsx
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
   LayoutChangeEvent,
@@ -13,12 +13,19 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
+import {
+  RouteProp,
+  useFocusEffect,
+  useNavigation,
+  useRoute,
+} from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 
 import Outfit3DViewer, { Outfit3DConfig } from '../components/Outfit3DViewer';
 import { ColorPaletteSheet } from '../components/ColorPaletteSheet';
+import { ShopRecommendationSheet } from '../components/ShopRecommendationSheet';
+import { RewardedUnlockModal } from '../components/RewardedUnlockModal';
 import { FashionColor, FASHION_COLORS } from '../constants/fashionColors';
 import { hexToHsl, shortColorName } from '../engine/OutfitEngine';
 import {
@@ -31,6 +38,21 @@ import {
   loadUserUndertone,
   saveUserUndertone,
 } from '../services/userPreferences';
+import {
+  buildOutfitSignature,
+  computeOutfitQuickScore,
+  generateDefaultOutfitTitle,
+  getCachedSavedOutfits,
+  loadSavedOutfits,
+  saveOutfitToLookbook,
+  SavedOutfit,
+} from '../services/lookbookStorage';
+import { AffiliateQuery } from '../services/affiliateService';
+import {
+  getCachedMonetizationState,
+  loadMonetizationState,
+  MonetizationState,
+} from '../services/monetizationService';
 import {
   MatchItemSelection,
   OutfitSlotId,
@@ -122,6 +144,67 @@ export const MatchCheckerScreen: React.FC = () => {
 
   // Tạm khóa cuộn dọc của ScrollView khi người dùng đang vuốt xoay mô hình 3D 360°
   const [isRotating3D, setIsRotating3D] = useState<boolean>(false);
+
+  // Theo dõi các bộ đồ đã lưu & giới hạn ô Tủ đồ
+  const [savedCount, setSavedCount] = useState<number>(
+    () => getCachedSavedOutfits().length
+  );
+  const [savedSignatures, setSavedSignatures] = useState<Set<string>>(
+    () => new Set(getCachedSavedOutfits().map(o => o.signature))
+  );
+  const [maxWardrobeSlots, setMaxWardrobeSlots] = useState<number>(
+    () => getCachedMonetizationState().maxWardrobeSlots
+  );
+  const [unlockModalVisible, setUnlockModalVisible] = useState<boolean>(false);
+
+  // Bottom Sheet gợi ý mua sắm cho Màu cầu nối 10%
+  const [shopSheetState, setShopSheetState] = useState<{
+    query: AffiliateQuery;
+    colorHex: string;
+    itemDisplayLabel: string;
+  } | null>(null);
+
+  const [toastState, setToastState] = useState<{
+    message: string;
+    actionLabel: string;
+  } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      Promise.all([loadSavedOutfits(), loadMonetizationState()]).then(
+        ([list, monetState]) => {
+          if (!active) return;
+          setSavedCount(list.length);
+          setSavedSignatures(new Set(list.map(o => o.signature)));
+          setMaxWardrobeSlots(monetState.maxWardrobeSlots);
+        }
+      );
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showSaveToast = useCallback((message: string, actionLabel: string) => {
+    setToastState({ message, actionLabel });
+    if (toastTimerRef.current !== null) {
+      clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = setTimeout(() => {
+      setToastState(null);
+      toastTimerRef.current = null;
+    }, 2500);
+  }, []);
 
   // Kích thước khung sân khấu 3D bên trái Hero Card (bảo toàn vừa khít biên, cập nhật chính xác qua onLayout)
   const [stageSize, setStageSize] = useState<{ width: number; height: number }>(
@@ -393,6 +476,185 @@ export const MatchCheckerScreen: React.FC = () => {
     resolvedColors,
     undertone,
   ]);
+
+  const currentMatchItems = useMemo<SavedOutfit['items']>(() => {
+    const bottomShape = gender === 'female' ? 'a_line_skirt' : 'wide_pants';
+    return {
+      top: {
+        slot: 'top',
+        colorId: resolvedColors.top.id,
+        hex: resolvedColors.top.hex,
+        colorName: resolvedColors.top.name,
+        silhouette: 'tshirt',
+      },
+      ...(isLayering
+        ? {
+            outerwear: {
+              slot: 'outerwear' as const,
+              colorId: resolvedColors.outerwear.id,
+              hex: resolvedColors.outerwear.hex,
+              colorName: resolvedColors.outerwear.name,
+              silhouette: 'blazer',
+            },
+          }
+        : {}),
+      bottom: {
+        slot: 'bottom',
+        colorId: resolvedColors.bottom.id,
+        hex: resolvedColors.bottom.hex,
+        colorName: resolvedColors.bottom.name,
+        silhouette: bottomShape,
+      },
+      shoes: {
+        slot: 'shoes',
+        colorId: resolvedColors.shoes.id,
+        hex: resolvedColors.shoes.hex,
+        colorName: resolvedColors.shoes.name,
+        silhouette: 'sneaker',
+      },
+    };
+  }, [gender, isLayering, resolvedColors]);
+
+  const currentMatchSignature = useMemo(
+    () =>
+      buildOutfitSignature({
+        gender,
+        isLayering,
+        items: currentMatchItems,
+      }),
+    [gender, isLayering, currentMatchItems]
+  );
+
+  const isCurrentMatchSaved = savedSignatures.has(currentMatchSignature);
+
+  // Màu cầu nối mục tiêu cho nút CTA mua sắm (ưu tiên màu đang chọn, mặc định gợi ý #1)
+  const targetBridgeSuggestion =
+    activeBridge ?? evaluation.bridgeSuggestions[0] ?? null;
+
+  const bridgeSlotDisplayName = useMemo(() => {
+    switch (evaluation.bridgeSlot) {
+      case 'shoes':
+        return 'Giày';
+      case 'bottom':
+        return gender === 'female' ? 'Quần/Váy' : 'Quần';
+      case 'outerwear':
+        return 'Áo khoác';
+      default:
+        return 'Áo';
+    }
+  }, [evaluation.bridgeSlot, gender]);
+
+  const handleOpenBridgeShop = useCallback(() => {
+    if (!targetBridgeSuggestion) return;
+    const defaultBridgeSilhouette =
+      evaluation.bridgeSlot === 'shoes'
+        ? 'sneaker'
+        : evaluation.bridgeSlot === 'bottom'
+        ? gender === 'female'
+          ? 'a_line_skirt'
+          : 'wide_pants'
+        : evaluation.bridgeSlot === 'outerwear'
+        ? 'blazer'
+        : 'tshirt';
+
+    setShopSheetState({
+      query: {
+        gender,
+        slot: evaluation.bridgeSlot,
+        silhouette: defaultBridgeSilhouette,
+        colorId: targetBridgeSuggestion.color.id,
+        colorName: targetBridgeSuggestion.color.name,
+        colorFamily: targetBridgeSuggestion.color.category,
+      },
+      colorHex: targetBridgeSuggestion.color.hex,
+      itemDisplayLabel: bridgeSlotDisplayName,
+    });
+  }, [
+    bridgeSlotDisplayName,
+    evaluation.bridgeSlot,
+    gender,
+    targetBridgeSuggestion,
+  ]);
+
+  const commitSaveMatchToLookbook = useCallback(
+    async (customSuccessMessage?: string) => {
+      const quickEval = computeOutfitQuickScore(
+        currentMatchItems,
+        undertone,
+        isLayering
+      );
+      const title = generateDefaultOutfitTitle(
+        'casual',
+        currentMatchItems,
+        isLayering
+      );
+
+      const { list, isDuplicate } = await saveOutfitToLookbook({
+        title,
+        gender,
+        occasion: 'casual',
+        isLayering,
+        items: currentMatchItems,
+        harmonyScore: displayScore,
+        undertoneLabel: quickEval.undertoneLabel,
+        signature: currentMatchSignature,
+      });
+
+      setSavedCount(list.length);
+      setSavedSignatures(new Set(list.map(o => o.signature)));
+
+      if (customSuccessMessage) {
+        showSaveToast(customSuccessMessage, 'Xem →');
+      } else if (isDuplicate) {
+        showSaveToast('Bộ này đã có trong Tủ đồ', 'Mở Tủ đồ');
+      } else {
+        showSaveToast('Đã lưu vào Tủ đồ', 'Xem →');
+      }
+    },
+    [
+      currentMatchItems,
+      currentMatchSignature,
+      displayScore,
+      gender,
+      isLayering,
+      showSaveToast,
+      undertone,
+    ]
+  );
+
+  const handleSaveMatchToLookbook = useCallback(async () => {
+    const [currentList, monetState] = await Promise.all([
+      loadSavedOutfits(),
+      loadMonetizationState(),
+    ]);
+    setSavedCount(currentList.length);
+    setSavedSignatures(new Set(currentList.map(o => o.signature)));
+    setMaxWardrobeSlots(monetState.maxWardrobeSlots);
+
+    const alreadySaved = currentList.some(
+      o => o.signature === currentMatchSignature
+    );
+    if (!alreadySaved && currentList.length >= monetState.maxWardrobeSlots) {
+      setUnlockModalVisible(true);
+      return;
+    }
+
+    await commitSaveMatchToLookbook();
+  }, [commitSaveMatchToLookbook, currentMatchSignature]);
+
+  const handleWardrobeUnlocked = useCallback(
+    async (nextState: MonetizationState) => {
+      setMaxWardrobeSlots(nextState.maxWardrobeSlots);
+      setUnlockModalVisible(false);
+      await commitSaveMatchToLookbook('Đã mở thêm 3 ô & lưu bộ đồ!');
+    },
+    [commitSaveMatchToLookbook]
+  );
+
+  const handleOpenLookbookFromToast = useCallback(() => {
+    setToastState(null);
+    navigation.navigate('Lookbook');
+  }, [navigation]);
 
   const editingSlotId: OutfitSlotId =
     editingTarget === 'item1'
@@ -801,6 +1063,31 @@ export const MatchCheckerScreen: React.FC = () => {
               </Text>
             </View>
           )}
+
+          {/* ĐIỂM VÀNG AFFILIATE #1: CTA TÌM MẪU MÀU CẦU NỐI 10% */}
+          {targetBridgeSuggestion && (
+            <TouchableOpacity
+              style={styles.bridgeShopCtaBtn}
+              onPress={handleOpenBridgeShop}
+              activeOpacity={0.84}
+              accessibilityLabel={`Tìm mẫu ${bridgeSlotDisplayName} màu ${shortColorName(
+                targetBridgeSuggestion.color.name
+              )}`}
+            >
+              <View
+                style={[
+                  styles.bridgeShopColorDot,
+                  { backgroundColor: targetBridgeSuggestion.color.hex },
+                  hexToHsl(targetBridgeSuggestion.color.hex).l > 82 &&
+                    styles.lightBorder,
+                ]}
+              />
+              <Text style={styles.bridgeShopCtaText} numberOfLines={1}>
+                🛍️ Tìm mẫu {bridgeSlotDisplayName} màu{' '}
+                {shortColorName(targetBridgeSuggestion.color.name)} →
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* 5. PHÂN TÍCH NGẮN (2–3 GẠCH ĐẦU DÒNG) */}
@@ -817,28 +1104,83 @@ export const MatchCheckerScreen: React.FC = () => {
         </View>
       </ScrollView>
 
-      {/* NÚT CTA LỚN CỐ ĐỊNH Ở ĐÁY MÀN HÌNH */}
+      {/* THANH TOAST XÁC NHẬN LƯU TỦ ĐỒ NỔI NGAY TRÊN BOTTOM BAR */}
+      {toastState && (
+        <View
+          style={[
+            styles.saveToastWrap,
+            { bottom: Math.max(insets.bottom, 14) + 74 },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={styles.saveToastPill}>
+            <Ionicons name="bookmark" size={14} color="#FFFFFF" />
+            <Text style={styles.saveToastText} numberOfLines={1}>
+              {toastState.message}
+            </Text>
+            <TouchableOpacity
+              style={styles.saveToastActionBtn}
+              onPress={handleOpenLookbookFromToast}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.saveToastActionText}>
+                {toastState.actionLabel}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* NÚT LƯU TỦ ĐỒ + CTA LỚN CỐ ĐỊNH Ở ĐÁY MÀN HÌNH */}
       <View
         style={[
           styles.bottomCtaBar,
           { paddingBottom: Math.max(insets.bottom, 14) },
         ]}
       >
-        <TouchableOpacity
-          style={styles.studioCtaBtn}
-          onPress={handleOpenInStudio}
-          activeOpacity={0.88}
-        >
-          <Ionicons
-            name="layers-outline"
-            size={18}
-            color="#FFFFFF"
-            style={{ marginRight: 8 }}
-          />
-          <Text style={styles.studioCtaText}>
-            Mở trong Studio Tự tay mix đồ →
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.bottomCtaRow}>
+          <TouchableOpacity
+            style={[
+              styles.saveLookbookBtn,
+              isCurrentMatchSaved && styles.saveLookbookBtnSaved,
+            ]}
+            onPress={handleSaveMatchToLookbook}
+            activeOpacity={0.82}
+            accessibilityLabel={
+              isCurrentMatchSaved ? 'Đã lưu trong Tủ đồ' : 'Lưu bộ đồ vào Tủ đồ'
+            }
+          >
+            <Ionicons
+              name={isCurrentMatchSaved ? 'bookmark' : 'bookmark-outline'}
+              size={18}
+              color={isCurrentMatchSaved ? '#FFFFFF' : '#111827'}
+            />
+            <Text
+              style={[
+                styles.saveLookbookBtnText,
+                isCurrentMatchSaved && styles.saveLookbookBtnTextSaved,
+              ]}
+            >
+              {isCurrentMatchSaved ? 'Đã lưu' : 'Lưu'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.studioCtaBtn}
+            onPress={handleOpenInStudio}
+            activeOpacity={0.88}
+          >
+            <Ionicons
+              name="layers-outline"
+              size={18}
+              color="#FFFFFF"
+              style={{ marginRight: 7 }}
+            />
+            <Text style={styles.studioCtaText} numberOfLines={1}>
+              Mở trong Studio Tự tay mix đồ →
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* MODAL CHỌN MÀU VẢI CHUẨN ĐỂ THỬ ĐỔI NGAY TẠI CHỖ (KÈM NHÃN TÔN DA) */}
@@ -952,6 +1294,25 @@ export const MatchCheckerScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+      {/* BOTTOM SHEET GỢI Ý MUA SẮM SHOPEE & TIKTOK SHOP */}
+      <ShopRecommendationSheet
+        visible={shopSheetState !== null}
+        query={shopSheetState?.query ?? null}
+        placement="bridge"
+        colorHex={shopSheetState?.colorHex}
+        itemDisplayLabel={shopSheetState?.itemDisplayLabel}
+        onClose={() => setShopSheetState(null)}
+      />
+
+      {/* MODAL MỞ KHÓA THÊM +3 Ô TỦ ĐỒ (REWARDED AD) */}
+      <RewardedUnlockModal
+        visible={unlockModalVisible}
+        savedCount={savedCount}
+        maxWardrobeSlots={maxWardrobeSlots}
+        mode="full_gate"
+        onClose={() => setUnlockModalVisible(false)}
+        onUnlocked={handleWardrobeUnlocked}
+      />
     </View>
   );
 };
@@ -1459,6 +1820,33 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#111827',
   },
+  bridgeShopCtaBtn: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.2,
+    borderColor: '#111827',
+    borderRadius: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  bridgeShopColorDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: 'rgba(17, 24, 39, 0.18)',
+    flexShrink: 0,
+  },
+  bridgeShopCtaText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#111827',
+    flexShrink: 1,
+  },
 
   // DETAILS LIST
   detailsList: {
@@ -1497,10 +1885,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingTop: 10,
   },
+  bottomCtaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  saveLookbookBtn: {
+    height: 50,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  saveLookbookBtnSaved: {
+    backgroundColor: '#111827',
+    borderColor: '#111827',
+  },
+  saveLookbookBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  saveLookbookBtnTextSaved: {
+    color: '#FFFFFF',
+  },
   studioCtaBtn: {
+    flex: 1,
+    height: 50,
     backgroundColor: '#111827',
     borderRadius: 16,
-    paddingVertical: 15,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1512,9 +1931,49 @@ const styles = StyleSheet.create({
   },
   studioCtaText: {
     color: '#FFFFFF',
-    fontSize: 14.5,
+    fontSize: 13.5,
     fontWeight: '800',
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
+    flexShrink: 1,
+  },
+  saveToastWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  saveToastPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(17, 24, 39, 0.94)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 22,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  saveToastText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 6,
+    flexShrink: 1,
+  },
+  saveToastActionBtn: {
+    marginLeft: 10,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  saveToastActionText: {
+    color: '#111827',
+    fontSize: 11.5,
+    fontWeight: '800',
   },
 
   // SLOT PICKER MODAL (CHỌN 1 TRONG 4 LOẠI TRANG PHỤC)

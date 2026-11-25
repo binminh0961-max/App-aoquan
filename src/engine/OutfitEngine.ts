@@ -9,7 +9,8 @@
  */
 
 import { FashionColor, FASHION_COLORS } from '../constants/fashionColors';
-import { deltaE2000, hexToRgb, rgbToLab, RGB } from '../services/ColorEngine';
+import { deltaE2000, hexToLab, hexToRgb, rgbToLab, RGB } from '../services/ColorEngine';
+import type { SavedOutfit } from '../services/lookbookStorage';
 import {
   OutfitSlotId,
   SilhouetteId,
@@ -1294,6 +1295,169 @@ export function initStudioOutfitFromPreset(
     occasion: 'all',
     undertone: preset.undertone ?? 'neutral',
     harmonyTitle: 'Phối màu Từ Chấm điểm 2 món',
+    harmonyDescription: '',
+    harmonyType: 'custom',
+  };
+
+  const advice = generateOutfitAdvice(draft);
+
+  return {
+    ...draft,
+    harmonyTitle: advice.title,
+    harmonyDescription: advice.reason,
+  };
+}
+
+function resolveColorForSavedSlot(
+  colorId: string,
+  hex: string,
+  colorName: string
+): FashionColor {
+  const byId = FASHION_COLORS.find(c => c.id === colorId);
+  if (byId) return byId;
+  const normalizedHex = hex.toUpperCase();
+  const byHex = FASHION_COLORS.find(c => c.hex.toUpperCase() === normalizedHex);
+  if (byHex) return byHex;
+  return {
+    id: colorId || `saved-${normalizedHex.replace('#', '')}`,
+    name: colorName || normalizedHex,
+    hex,
+    category: 'gray_black',
+    lab: hexToLab(hex),
+    nearbyHexes: [hex, hex, hex],
+  };
+}
+
+function sanitizeSilhouetteForSlot(
+  slotId: OutfitSlotId,
+  rawSilhouette: string,
+  gender: SilhouetteStyleType
+): SilhouetteId {
+  if (slotId === 'outerwear') {
+    const valid = OUTERWEAR_SILHOUETTES.find(s => s.id === rawSilhouette);
+    return valid ? valid.id : 'blazer';
+  }
+  if (slotId === 'top') {
+    const allowed = getTopSilhouettes(gender);
+    const valid = allowed.find(s => s.id === rawSilhouette);
+    if (valid) return valid.id;
+    const anyTop = TOP_SILHOUETTES.find(s => s.id === rawSilhouette);
+    return anyTop ? anyTop.id : 'tshirt';
+  }
+  if (slotId === 'bottom') {
+    const allowed = getBottomSilhouettes(gender);
+    const valid = allowed.find(s => s.id === rawSilhouette);
+    if (valid) return valid.id;
+    const anyBottom = BOTTOM_SILHOUETTES.find(s => s.id === rawSilhouette);
+    return anyBottom ? anyBottom.id : gender === 'female' ? 'a_line_skirt' : 'wide_pants';
+  }
+  const allowed = getShoesSilhouettes(gender);
+  const valid = allowed.find(s => s.id === rawSilhouette);
+  if (valid) return valid.id;
+  const anyShoe = SHOES_SILHOUETTES.find(s => s.id === rawSilhouette);
+  return anyShoe ? anyShoe.id : 'sneaker';
+}
+
+/**
+ * Khôi phục trọn vẹn một bộ đồ đã lưu (`SavedOutfit`) từ Tủ đồ / So sánh lên Studio
+ * giữ đúng giới tính, hoàn cảnh, chế độ layering, phom dáng và màu sắc từng món.
+ */
+export function initStudioOutfitFromSaved(
+  saved: SavedOutfit,
+  undertone: SkinUndertone = 'neutral'
+): StudioOutfitState {
+  const { gender, isLayering, items, occasion } = saved;
+
+  const topColor = resolveColorForSavedSlot(
+    items.top.colorId,
+    items.top.hex,
+    items.top.colorName
+  );
+  const bottomColor = resolveColorForSavedSlot(
+    items.bottom.colorId,
+    items.bottom.hex,
+    items.bottom.colorName
+  );
+  const shoesColor = resolveColorForSavedSlot(
+    items.shoes.colorId,
+    items.shoes.hex,
+    items.shoes.colorName
+  );
+  const fallbackOuter =
+    FASHION_COLORS.find(c => c.id === 'gb-1') || FASHION_COLORS[6] || topColor;
+  const outerColor = items.outerwear
+    ? resolveColorForSavedSlot(
+        items.outerwear.colorId,
+        items.outerwear.hex,
+        items.outerwear.colorName
+      )
+    : fallbackOuter;
+
+  const topShape = sanitizeSilhouetteForSlot('top', items.top.silhouette, gender);
+  const outerShape = sanitizeSilhouetteForSlot(
+    'outerwear',
+    items.outerwear?.silhouette || 'blazer',
+    gender
+  );
+  const bottomShape = sanitizeSilhouetteForSlot('bottom', items.bottom.silhouette, gender);
+  const shoesShape = sanitizeSilhouetteForSlot('shoes', items.shoes.silhouette, gender);
+
+  const sourceSlot: OutfitSlotId =
+    isLayering && items.outerwear ? 'outerwear' : 'top';
+  const scannedColor = sourceSlot === 'outerwear' ? outerColor : topColor;
+
+  const bottomLabel =
+    bottomShape === 'a_line_skirt' || bottomShape === 'mini_skirt'
+      ? 'Chân váy'
+      : 'Quần';
+
+  const slots: OutfitSlotsMap = {
+    outerwear: {
+      id: 'outerwear',
+      label: 'Áo khoác',
+      color: outerColor,
+      silhouette: outerShape,
+      locked: sourceSlot === 'outerwear',
+      isBase: sourceSlot === 'outerwear',
+    },
+    top: {
+      id: 'top',
+      label: isLayering ? 'Áo trong' : 'Áo chính',
+      color: topColor,
+      silhouette: topShape,
+      locked: sourceSlot === 'top',
+      isBase: sourceSlot === 'top',
+    },
+    bottom: {
+      id: 'bottom',
+      label: bottomLabel,
+      color: bottomColor,
+      silhouette: bottomShape,
+      locked: false,
+      isBase: false,
+    },
+    shoes: {
+      id: 'shoes',
+      label: 'Giày',
+      color: shoesColor,
+      silhouette: shoesShape,
+      locked: false,
+      isBase: false,
+    },
+  };
+
+  const visualRatios = calculateVisualRatios(slots, isLayering);
+
+  const draft: StudioOutfitState = {
+    isLayering,
+    sourceSlot,
+    scannedColor,
+    slots,
+    styleType: gender,
+    visualRatios,
+    occasion: occasion || 'all',
+    undertone,
+    harmonyTitle: saved.title,
     harmonyDescription: '',
     harmonyType: 'custom',
   };

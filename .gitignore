@@ -1,0 +1,28 @@
+# Expo & React Native
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Local secrets (Shopee Affiliate Open API keys - NEVER commit)
+.env
+.env.local
+.env.*.local
+
+# Native build artifacts
+android/
+ios/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# OS & logs
+.DS_Store
+Thumbs.db
+npm-debug.*
+yarn-debug.*
+yarn-error.*

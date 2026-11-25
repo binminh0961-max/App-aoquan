@@ -80,6 +80,10 @@ export interface Outfit3DViewerProps {
   config: Outfit3DConfig;
   onSelectSlot: (slot: OutfitSlotId) => void;
   onResetView?: () => void;
+  /** Đồng bộ góc nhìn từ bên ngoài (dùng cho màn hình So sánh 2 phương án) */
+  externalAnglePreset?: 'front' | 'side' | 'back';
+  /** Chế độ thu gọn bỏ minHeight 360 để vừa khít khung chia đôi 50/50 */
+  compactMode?: boolean;
 }
 
 // =============================================================
@@ -631,6 +635,8 @@ export default function Outfit3DViewer({
   config,
   onSelectSlot,
   onResetView,
+  externalAnglePreset,
+  compactMode = false,
 }: Outfit3DViewerProps) {
   const {
     gender,
@@ -963,7 +969,7 @@ export default function Outfit3DViewer({
   }, [frameCallback]);
 
   useEffect(() => {
-    if (presetNonce === 0) return;
+    if (presetNonce === 0 || externalAnglePreset) return;
     if (cameraPreset === 'front') {
       targetYawSV.value = 0;
       targetPitchSV.value = 0.21;
@@ -978,6 +984,23 @@ export default function Outfit3DViewer({
     velPitchSV.value = 0;
     wakeLoop();
   }, [cameraPreset, presetNonce]);
+
+  useEffect(() => {
+    if (!externalAnglePreset) return;
+    if (externalAnglePreset === 'front') {
+      targetYawSV.value = 0;
+      targetPitchSV.value = 0.21;
+    } else if (externalAnglePreset === 'side') {
+      targetYawSV.value = 0.62;
+      targetPitchSV.value = 0.22;
+    } else {
+      targetYawSV.value = Math.PI;
+      targetPitchSV.value = 0.21;
+    }
+    velYawSV.value = 0;
+    velPitchSV.value = 0;
+    wakeLoop();
+  }, [externalAnglePreset, presetNonce]);
 
   useEffect(() => {
     autoRotateSV.value = autoRotate;
@@ -1775,7 +1798,7 @@ export default function Outfit3DViewer({
 
   return (
     <View
-      style={styles.container}
+      style={[styles.container, compactMode && styles.containerCompact]}
       onLayout={handleLayout}
       {...panResponder.panHandlers}
     >
@@ -1795,5 +1818,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  containerCompact: {
+    minHeight: 0,
   },
 });

@@ -11,7 +11,10 @@ import { CameraPickerScreen } from './src/screens/CameraPickerScreen';
 import { ImagePickerScreen } from './src/screens/ImagePickerScreen';
 import { OutfitSuggestionScreen } from './src/screens/OutfitSuggestionScreen';
 import { MatchCheckerScreen } from './src/screens/MatchCheckerScreen';
+import { LookbookScreen } from './src/screens/LookbookScreen';
+import { CompareOutfitsScreen } from './src/screens/CompareOutfitsScreen';
 import { FashionColor } from './src/constants/fashionColors';
+import { SavedOutfit } from './src/services/lookbookStorage';
 import {
   CompareContext,
   MatchItemSelection,
@@ -25,10 +28,16 @@ export type RootStackParamList = {
     baseColor: FashionColor;
     baseRole?: 'top' | 'bottom';
     initialPresetOutfit?: StudioPresetOutfit;
+    loadSavedOutfit?: SavedOutfit;
   };
   MatchChecker: {
     item1: MatchItemSelection;
     item2: MatchItemSelection;
+  };
+  Lookbook: undefined;
+  CompareOutfits: {
+    outfitA: SavedOutfit;
+    outfitB: SavedOutfit;
   };
 };
 
@@ -61,6 +70,20 @@ export default function App() {
               component={MatchCheckerScreen}
               options={{
                 contentStyle: { backgroundColor: '#F5F5F3' },
+              }}
+            />
+            <Stack.Screen
+              name="Lookbook"
+              component={LookbookScreen}
+              options={{
+                contentStyle: { backgroundColor: '#F4F4F1' },
+              }}
+            />
+            <Stack.Screen
+              name="CompareOutfits"
+              component={CompareOutfitsScreen}
+              options={{
+                contentStyle: { backgroundColor: '#F4F4F1' },
               }}
             />
           </Stack.Navigator>
