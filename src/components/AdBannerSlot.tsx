@@ -2,21 +2,52 @@
 /**
  * Vị trí dành riêng cho AdMob Adaptive Banner ở đáy màn hình LookbookScreen.
  * Tách biệt hoàn toàn khỏi vùng nút tương tác để tuân thủ chính sách AdMob.
- * - Khi IS_REAL_ADMOB_ENABLED === false:
- *   - Trong __DEV__: hiển thị khung mỏng cao 52px để kiểm tra căn chỉnh layout.
- *   - Trong bản build Production: trả về null (không chiếm diện tích thừa).
- * - Ở Nhịp 5B: chỉ cần gắn <BannerAd /> vào nhánh IS_REAL_ADMOB_ENABLED === true.
+ * - Khi IS_REAL_ADMOB_ENABLED === true (Nhịp 5B): render `<BannerAd />` thật với
+ *   `getBannerAdUnitId()` (tự động dùng `TestIds.ADAPTIVE_BANNER` khi `__DEV__` hoặc chưa điền ID thật).
+ * - Bọc ErrorBoundary + xử lý `onAdFailedToLoad` an toàn: khi mất mạng hoặc chưa link native,
+ *   tự ẩn gọn (`null`) và tuyệt đối không làm crash UI.
  */
 
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { IS_REAL_ADMOB_ENABLED } from '../services/monetizationService';
+import { BannerAd, BannerAdSize } from 'react-native-google-mobile-ads';
+import {
+  getBannerAdUnitId,
+  IS_REAL_ADMOB_ENABLED,
+  isNativeAdsSupported,
+} from '../services/monetizationService';
 
 export interface AdBannerSlotProps {
   /** Có chèn thêm paddingBottom theo safe-area đáy màn hình hay không (mặc định true) */
   respectBottomInset?: boolean;
+}
+
+interface BannerErrorBoundaryState {
+  hasError: boolean;
+}
+
+class BannerErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  BannerErrorBoundaryState
+> {
+  state: BannerErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): BannerErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(): void {
+    // Im lặng bỏ qua nếu native view chưa link (VD: chạy thử Expo Go / Web)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return null;
+    }
+    return this.props.children;
+  }
 }
 
 export const AdBannerSlot: React.FC<AdBannerSlotProps> = ({
@@ -24,6 +55,16 @@ export const AdBannerSlot: React.FC<AdBannerSlotProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const bottomPad = respectBottomInset ? Math.max(insets.bottom, 0) : 0;
+  const [adLoaded, setAdLoaded] = useState<boolean>(false);
+  const [adFailed, setAdFailed] = useState<boolean>(false);
+
+  const unitId = useMemo(() => {
+    try {
+      return getBannerAdUnitId();
+    } catch {
+      return '';
+    }
+  }, []);
 
   if (!IS_REAL_ADMOB_ENABLED) {
     if (!__DEV__) {
@@ -42,11 +83,37 @@ export const AdBannerSlot: React.FC<AdBannerSlotProps> = ({
     );
   }
 
-  // [NHỊP 5B]: Render <BannerAd size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER} ... /> tại đây
+  // Trên Web hoặc khi mất mạng / không tải được banner -> ẩn sạch không chiếm diện tích thừa
+  if (!isNativeAdsSupported() || Platform.OS === 'web' || !unitId || adFailed) {
+    return null;
+  }
+
   return (
-    <View style={[styles.realWrapper, { paddingBottom: bottomPad }]}>
-      <View style={styles.realBannerInner} />
-    </View>
+    <BannerErrorBoundary>
+      <View
+        style={[
+          styles.realWrapper,
+          adLoaded ? styles.realWrapperVisible : styles.realWrapperHidden,
+          { paddingBottom: adLoaded ? bottomPad : 0 },
+        ]}
+      >
+        <BannerAd
+          unitId={unitId}
+          size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+          requestOptions={{
+            requestNonPersonalizedAdsOnly: true,
+          }}
+          onAdLoaded={() => {
+            setAdFailed(false);
+            setAdLoaded(true);
+          }}
+          onAdFailedToLoad={() => {
+            setAdLoaded(false);
+            setAdFailed(true);
+          }}
+        />
+      </View>
+    </BannerErrorBoundary>
   );
 };
 
@@ -73,16 +140,19 @@ const styles = StyleSheet.create({
   },
   realWrapper: {
     width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  realWrapperVisible: {
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
-    alignItems: 'center',
+    paddingTop: 4,
   },
-  realBannerInner: {
-    minHeight: 52,
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
+  realWrapperHidden: {
+    height: 0,
+    overflow: 'hidden',
+    opacity: 0,
   },
 });
 

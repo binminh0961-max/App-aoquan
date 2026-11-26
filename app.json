@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Máy hút mã màu & Phối đồ thực tế",
+    "name": "MixTone 3D",
     "slug": "app-aoquan",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -24,15 +24,15 @@
       }
     },
     "android": {
+      "package": "com.nhatminh300.appaoquan",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"
       },
       "permissions": [
-        "CAMERA",
         "android.permission.CAMERA"
-      ],
-      "package": "com.nhatminh300.appaoquan"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -55,7 +55,13 @@
           }
         }
       ],
-      "./plugins/withLowMemoryGradle.js"
+      "./plugins/withLowMemoryGradle.js",
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-9785592508637778~8317813916"
+        }
+      ]
     ],
     "sdkVersion": "58.0.0",
     "runtimeVersion": "1.0.0",

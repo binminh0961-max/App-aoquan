@@ -1,6 +1,6 @@
 import 'react-native-gesture-handler'; // must be first
 import 'react-native-reanimated';
-import React from 'react';
+import React, { useEffect } from 'react';
 import { StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -15,6 +15,8 @@ import { LookbookScreen } from './src/screens/LookbookScreen';
 import { CompareOutfitsScreen } from './src/screens/CompareOutfitsScreen';
 import { FashionColor } from './src/constants/fashionColors';
 import { SavedOutfit } from './src/services/lookbookStorage';
+import { initializeMobileAds } from './src/services/monetizationService';
+import { loadUserPreferences } from './src/services/userPreferences';
 import {
   CompareContext,
   MatchItemSelection,
@@ -44,6 +46,11 @@ export type RootStackParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
+  useEffect(() => {
+    void loadUserPreferences();
+    void initializeMobileAds();
+  }, []);
+
   return (
     <GestureHandlerRootView style={styles.container}>
       <SafeAreaProvider>

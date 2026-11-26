@@ -40,6 +40,10 @@ import {
   UndertoneLabel,
 } from '../services/lookbookStorage';
 import { AffiliateQuery } from '../services/affiliateService';
+import {
+  maybeShowInterstitial,
+  preloadInterstitialAd,
+} from '../services/monetizationService';
 import { SilhouetteId, SkinUndertone } from '../types/outfit';
 import { RootStackParamList } from '../../App';
 
@@ -232,6 +236,7 @@ export const CompareOutfitsScreen: React.FC = () => {
 
   useEffect(() => {
     let mounted = true;
+    preloadInterstitialAd();
     loadUserUndertone().then(saved => {
       if (mounted && saved) {
         setUndertone(saved);
@@ -241,6 +246,11 @@ export const CompareOutfitsScreen: React.FC = () => {
       mounted = false;
     };
   }, []);
+
+  const handleGoBack = useCallback(() => {
+    void maybeShowInterstitial('exit_compare');
+    navigation.goBack();
+  }, [navigation]);
 
   // Chấm điểm thời gian thực theo tông da hiện tại của người dùng
   const evalA = useMemo(
@@ -456,7 +466,7 @@ export const CompareOutfitsScreen: React.FC = () => {
         <View style={styles.headerRow}>
           <TouchableOpacity
             style={styles.backBtn}
-            onPress={() => navigation.goBack()}
+            onPress={handleGoBack}
             activeOpacity={0.78}
             accessibilityLabel="Quay lại"
           >

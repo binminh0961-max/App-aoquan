@@ -46,6 +46,7 @@ import {
 } from '../services/monetizationService';
 import { AdBannerSlot } from '../components/AdBannerSlot';
 import { RewardedUnlockModal } from '../components/RewardedUnlockModal';
+import { SettingsPrivacyModal } from '../components/SettingsPrivacyModal';
 import { SilhouetteId } from '../types/outfit';
 import { RootStackParamList } from '../../App';
 
@@ -286,6 +287,7 @@ export const LookbookScreen: React.FC = () => {
     () => getCachedMonetizationState().maxWardrobeSlots
   );
   const [unlockModalVisible, setUnlockModalVisible] = useState<boolean>(false);
+  const [settingsModalVisible, setSettingsModalVisible] = useState<boolean>(false);
 
   // Chế độ chọn So sánh 2 phương án
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false);
@@ -639,39 +641,50 @@ export const LookbookScreen: React.FC = () => {
             </View>
           </View>
 
-          <TouchableOpacity
-            style={[
-              styles.compareToggleBtn,
-              canEnterCompare && !isCompareMode && styles.compareToggleBtnReady,
-              isCompareMode && styles.compareToggleBtnCancel,
-              !canEnterCompare && styles.compareToggleBtnDisabled,
-            ]}
-            onPress={handleToggleCompareMode}
-            activeOpacity={0.82}
-            accessibilityLabel={isCompareMode ? 'Hủy chế độ so sánh' : 'Bật chế độ so sánh'}
-          >
-            <Ionicons
-              name={isCompareMode ? 'close' : 'git-compare-outline'}
-              size={15}
-              color={
-                isCompareMode
-                  ? '#111827'
-                  : canEnterCompare
-                  ? '#FFFFFF'
-                  : '#9CA3AF'
-              }
-            />
-            <Text
+          <View style={styles.headerRightGroup}>
+            <TouchableOpacity
               style={[
-                styles.compareToggleText,
-                canEnterCompare && !isCompareMode && styles.compareToggleTextReady,
-                isCompareMode && styles.compareToggleTextCancel,
-                !canEnterCompare && styles.compareToggleTextDisabled,
+                styles.compareToggleBtn,
+                canEnterCompare && !isCompareMode && styles.compareToggleBtnReady,
+                isCompareMode && styles.compareToggleBtnCancel,
+                !canEnterCompare && styles.compareToggleBtnDisabled,
               ]}
+              onPress={handleToggleCompareMode}
+              activeOpacity={0.82}
+              accessibilityLabel={isCompareMode ? 'Hủy chế độ so sánh' : 'Bật chế độ so sánh'}
             >
-              {isCompareMode ? 'Hủy' : 'So sánh'}
-            </Text>
-          </TouchableOpacity>
+              <Ionicons
+                name={isCompareMode ? 'close' : 'git-compare-outline'}
+                size={15}
+                color={
+                  isCompareMode
+                    ? '#111827'
+                    : canEnterCompare
+                    ? '#FFFFFF'
+                    : '#9CA3AF'
+                }
+              />
+              <Text
+                style={[
+                  styles.compareToggleText,
+                  canEnterCompare && !isCompareMode && styles.compareToggleTextReady,
+                  isCompareMode && styles.compareToggleTextCancel,
+                  !canEnterCompare && styles.compareToggleTextDisabled,
+                ]}
+              >
+                {isCompareMode ? 'Hủy' : 'So sánh'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.settingsHeaderBtn}
+              onPress={() => setSettingsModalVisible(true)}
+              activeOpacity={0.78}
+              accessibilityLabel="Cài đặt và Chính sách bảo mật"
+            >
+              <Ionicons name="settings-outline" size={18} color="#111827" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Thanh hướng dẫn gọn khi bật chế độ So sánh */}
@@ -912,6 +925,12 @@ export const LookbookScreen: React.FC = () => {
         onUnlocked={handleWardrobeUnlocked}
       />
 
+      {/* MODAL CÀI ĐẶT & CHÍNH SÁCH BẢO MẬT */}
+      <SettingsPrivacyModal
+        visible={settingsModalVisible}
+        onClose={() => setSettingsModalVisible(false)}
+      />
+
       {/* MODAL ĐỔI TÊN BỘ ĐỒ */}
       <Modal
         visible={renamingOutfit !== null}
@@ -1000,7 +1019,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     minWidth: 0,
-    marginRight: 10,
+    marginRight: 8,
+  },
+  headerRightGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+  settingsHeaderBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   backBtn: {
     width: 38,

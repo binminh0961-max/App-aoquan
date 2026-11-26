@@ -1,18 +1,17 @@
 // src/components/RewardedUnlockModal.tsx
 /**
- * Modal mở khóa thêm +3 ô Tủ đồ bằng quảng cáo có thưởng (Rewarded Ad).
+ * Modal mở khóa thêm +3 ô Tủ đồ bằng quảng cáo có thưởng (Rewarded Ad thật từ AdMob ở Nhịp 5B).
  * Dùng chung cho InteractiveMixStudio, MatchCheckerScreen và LookbookScreen.
  *
- * Luồng Nhịp 5A:
- * - Bấm "Xem quảng cáo (+3 ô)" -> gọi `requestRewardedAd('unlock_wardrobe_slots', ...)`.
- * - Hiện đếm ngược mô phỏng 2 giây kèm nút "Hủy sớm" để test đủ 2 nhánh:
- *   1. Xem hết 2 giây -> gọi `grantWardrobeBonusSlots(+3)` -> gọi `onUnlocked(updatedState)`.
- *   2. Bấm "Hủy sớm" -> không cộng ô, báo nhẹ để người dùng thử lại hoặc chọn "Để sau".
- * - Khi lên Nhịp 5B (IS_REAL_ADMOB_ENABLED = true), `requestRewardedAd` sẽ tự phát SDK AdMob thật.
+ * Chống treo UI & mất mạng:
+ * - Hiển thị trạng thái đang tải (ActivityIndicator) trong lúc gọi `requestRewardedAd`.
+ * - Nếu xem xong nhận thưởng -> gọi `grantWardrobeBonusSlots(+3)` -> gọi `onUnlocked`.
+ * - Nếu đóng sớm hoặc mất mạng / không tải được quảng cáo -> hiện thông báo gọn và mở khóa lại nút bấm.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Modal,
   Pressable,
   StyleSheet,
@@ -48,11 +47,12 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
   onUnlocked,
 }) => {
   const [watchingSecondsLeft, setWatchingSecondsLeft] = useState<number | null>(null);
-  const [earlyCancelNotice, setEarlyCancelNotice] = useState<boolean>(false);
+  const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState<boolean>(false);
 
   const activeSessionRef = useRef<MockRewardedAdSession | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef<boolean>(true);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
@@ -61,7 +61,15 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
     }
   };
 
-  // Dọn dẹp sạch khi Modal đóng hoặc unmount
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimer();
+    };
+  }, []);
+
+  // Dọn dẹp sạch khi Modal đóng
   useEffect(() => {
     if (!visible) {
       clearTimer();
@@ -70,20 +78,17 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
         activeSessionRef.current = null;
       }
       setWatchingSecondsLeft(null);
-      setEarlyCancelNotice(false);
+      setNoticeMessage(null);
       setIsBusy(false);
     }
-    return () => {
-      clearTimer();
-    };
   }, [visible]);
 
-  const isWatching = watchingSecondsLeft !== null;
+  const isWatchingMock = watchingSecondsLeft !== null;
 
   const handleStartRewardedAd = async () => {
-    if (isBusy || isWatching) return;
+    if (isBusy || isWatchingMock) return;
     setIsBusy(true);
-    setEarlyCancelNotice(false);
+    setNoticeMessage(null);
 
     try {
       const result = await requestRewardedAd('unlock_wardrobe_slots', session => {
@@ -97,28 +102,44 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
           if (remaining <= 0) {
             clearTimer();
             activeSessionRef.current = null;
-            setWatchingSecondsLeft(null);
+            if (mountedRef.current) {
+              setWatchingSecondsLeft(null);
+            }
             session.complete();
-          } else {
+          } else if (mountedRef.current) {
             setWatchingSecondsLeft(remaining);
           }
         }, 1000);
       });
 
+      if (!mountedRef.current) return;
+
       if (result.rewarded) {
         const nextState = await grantWardrobeBonusSlots(REWARDED_BONUS_SLOTS);
+        if (!mountedRef.current) return;
         setIsBusy(false);
         onUnlocked(nextState);
       } else {
         setWatchingSecondsLeft(null);
-        setEarlyCancelNotice(true);
         setIsBusy(false);
+        if (result.errorMessage) {
+          setNoticeMessage(result.errorMessage);
+        } else {
+          setNoticeMessage(
+            `Bạn đã đóng quảng cáo sớm nên chưa nhận thêm ô. Hãy xem hết video để nhận +${REWARDED_BONUS_SLOTS} ô nhé!`
+          );
+        }
       }
     } catch {
       clearTimer();
       activeSessionRef.current = null;
-      setWatchingSecondsLeft(null);
-      setIsBusy(false);
+      if (mountedRef.current) {
+        setWatchingSecondsLeft(null);
+        setIsBusy(false);
+        setNoticeMessage(
+          'Không tải được quảng cáo lúc này. Vui lòng kiểm tra kết nối mạng và thử lại.'
+        );
+      }
     }
   };
 
@@ -130,14 +151,19 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
       session.cancel();
     } else {
       setWatchingSecondsLeft(null);
-      setEarlyCancelNotice(true);
+      setNoticeMessage(
+        `Bạn đã đóng quảng cáo sớm nên chưa nhận thêm ô. Hãy xem hết để nhận +${REWARDED_BONUS_SLOTS} ô nhé!`
+      );
       setIsBusy(false);
     }
   };
 
   const handleDismiss = () => {
-    if (isWatching) {
+    if (isWatchingMock) {
       handleCancelEarly();
+      return;
+    }
+    if (isBusy) {
       return;
     }
     onClose();
@@ -160,7 +186,7 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
         <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss} />
 
         <View style={styles.card}>
-          {!isWatching ? (
+          {!isWatchingMock ? (
             <>
               <View style={styles.iconCircle}>
                 <Ionicons name="sparkles-outline" size={24} color="#111827" />
@@ -172,30 +198,49 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
                 Xem 1 video quảng cáo ngắn để mở khóa thêm +{REWARDED_BONUS_SLOTS} ô Tủ đồ vĩnh viễn.
               </Text>
 
-              {earlyCancelNotice && (
-                <View style={styles.cancelNoticeBox}>
-                  <Ionicons name="information-circle-outline" size={14} color="#B45309" />
-                  <Text style={styles.cancelNoticeText}>
-                    Bạn đã đóng quảng cáo sớm nên chưa nhận thêm ô. Hãy xem hết để nhận +{REWARDED_BONUS_SLOTS} ô nhé!
-                  </Text>
+              {!!noticeMessage && (
+                <View style={styles.noticeBox}>
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={15}
+                    color="#B45309"
+                    style={{ marginTop: 1 }}
+                  />
+                  <Text style={styles.noticeText}>{noticeMessage}</Text>
                 </View>
               )}
 
               <TouchableOpacity
-                style={styles.primaryBtn}
+                style={[styles.primaryBtn, isBusy && styles.primaryBtnLoading]}
                 onPress={handleStartRewardedAd}
                 disabled={isBusy}
                 activeOpacity={0.86}
               >
-                <Ionicons name="play-circle-outline" size={19} color="#FFFFFF" />
-                <Text style={styles.primaryBtnText}>
-                  Xem quảng cáo (+{REWARDED_BONUS_SLOTS} ô)
-                </Text>
+                {isBusy ? (
+                  <>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>
+                      Đang tải quảng cáo...
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Ionicons
+                      name="play-circle-outline"
+                      size={19}
+                      color="#FFFFFF"
+                    />
+                    <Text style={styles.primaryBtnText}>
+                      Xem quảng cáo (+{REWARDED_BONUS_SLOTS} ô)
+                    </Text>
+                  </>
+                )}
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.secondaryBtn}
+                style={[styles.secondaryBtn, isBusy && styles.secondaryBtnDisabled]}
                 onPress={onClose}
+                disabled={isBusy}
                 activeOpacity={0.78}
               >
                 <Text style={styles.secondaryBtnText}>Để sau</Text>
@@ -205,7 +250,7 @@ export const RewardedUnlockModal: React.FC<RewardedUnlockModalProps> = ({
             <View style={styles.simAdWrap}>
               <View style={styles.simAdBadgeRow}>
                 <View style={styles.simAdBadge}>
-                  <Text style={styles.simAdBadgeText}>QUẢNG CÁO MÔ PHỎNG • NHỊP 5A</Text>
+                  <Text style={styles.simAdBadgeText}>QUẢNG CÁO MÔ PHỎNG</Text>
                 </View>
                 <View style={styles.countdownPill}>
                   <Text style={styles.countdownText}>{watchingSecondsLeft}s</Text>
@@ -288,7 +333,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 14,
   },
-  cancelNoticeBox: {
+  noticeBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     backgroundColor: '#FEF3C7',
@@ -301,7 +346,7 @@ const styles = StyleSheet.create({
     width: '100%',
     gap: 6,
   },
-  cancelNoticeText: {
+  noticeText: {
     flex: 1,
     fontSize: 11.5,
     lineHeight: 16,
@@ -319,6 +364,9 @@ const styles = StyleSheet.create({
     gap: 7,
     marginBottom: 8,
   },
+  primaryBtnLoading: {
+    backgroundColor: '#374151',
+  },
   primaryBtnText: {
     fontSize: 13.5,
     fontWeight: '800',
@@ -332,13 +380,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  secondaryBtnDisabled: {
+    opacity: 0.45,
+  },
   secondaryBtnText: {
     fontSize: 13,
     fontWeight: '700',
     color: '#4B5563',
   },
 
-  // SIMULATED AD VIEW
+  // SIMULATED AD VIEW (FALLBACK)
   simAdWrap: {
     width: '100%',
     gap: 12,

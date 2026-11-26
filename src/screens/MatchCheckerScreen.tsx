@@ -33,9 +33,10 @@ import {
   getBridgeSectionTitle,
 } from '../engine/MatchCheckerEngine';
 import {
+  getCachedUserGender,
   getCachedUserUndertone,
   getUndertoneShortLabel,
-  loadUserUndertone,
+  loadUserPreferences,
   saveUserUndertone,
 } from '../services/userPreferences';
 import {
@@ -123,7 +124,9 @@ export const MatchCheckerScreen: React.FC = () => {
 
   const [item1, setItem1] = useState<MatchItemSelection>(initialItem1);
   const [item2, setItem2] = useState<MatchItemSelection>(initialItem2);
-  const [gender, setGender] = useState<SilhouetteStyleType>('male');
+  const [gender, setGender] = useState<SilhouetteStyleType>(() =>
+    getCachedUserGender()
+  );
   const [undertone, setUndertone] = useState<SkinUndertone>(() =>
     getCachedUserUndertone()
   );
@@ -217,13 +220,13 @@ export const MatchCheckerScreen: React.FC = () => {
     }
   );
 
-  // Nạp tông da đã lưu khi mở màn hình (expo-file-system)
+  // Nạp tông da & giới tính mặc định đã lưu khi mở màn hình (expo-file-system)
   useEffect(() => {
     let mounted = true;
-    loadUserUndertone().then(saved => {
-      if (mounted && saved) {
-        setUndertone(saved);
-      }
+    loadUserPreferences().then(prefs => {
+      if (!mounted) return;
+      setUndertone(prefs.undertone);
+      setGender(prefs.gender);
     });
     return () => {
       mounted = false;

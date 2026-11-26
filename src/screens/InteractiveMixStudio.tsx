@@ -56,8 +56,9 @@ import {
   SkinUndertone,
 } from '../types/outfit';
 import {
+  getCachedUserGender,
   getCachedUserUndertone,
-  loadUserUndertone,
+  loadUserPreferences,
   saveUserUndertone,
 } from '../services/userPreferences';
 import {
@@ -133,7 +134,7 @@ export const InteractiveMixStudio: React.FC = () => {
       ? initStudioOutfitFromSaved(loadSavedOutfit, getCachedUserUndertone())
       : initialPresetOutfit
       ? initStudioOutfitFromPreset(initialPresetOutfit, baseColor)
-      : initStudioOutfit(baseColor, initialRole, 'male')
+      : initStudioOutfit(baseColor, initialRole, getCachedUserGender())
   );
   const studioStateRef = useRef<StudioOutfitState>(studioState);
   studioStateRef.current = studioState;
@@ -195,18 +196,24 @@ export const InteractiveMixStudio: React.FC = () => {
   // Modal chọn Tông da (Skin Undertone)
   const [undertoneSheetVisible, setUndertoneSheetVisible] = useState<boolean>(false);
 
-  // Tự động nạp Tông da người dùng đã lưu trên máy (expo-file-system) khi mở Studio
+  // Tự động nạp Tông da & Giới tính mặc định người dùng đã lưu trên máy khi mở Studio
   useEffect(() => {
     let cancelled = false;
-    loadUserUndertone().then(saved => {
-      if (cancelled || !saved) return;
+    loadUserPreferences().then(prefs => {
+      if (cancelled) return;
       setStudioState(prev => {
-        if (prev.undertone === saved) return prev;
-        // Nếu mở từ MatchChecker hoặc Tủ đồ đã lưu, giữ nguyên bộ màu đã chọn và chỉ cập nhật undertone
-        if (initialPresetOutfit || loadSavedOutfit) {
-          return { ...prev, undertone: saved };
+        let next = prev;
+        if (!initialPresetOutfit && !loadSavedOutfit && prev.styleType !== prefs.gender) {
+          next = switchGender(next, prefs.gender);
         }
-        return remixOutfitForContext(prev, { undertone: saved }, 'all');
+        if (next.undertone !== prefs.undertone) {
+          if (initialPresetOutfit || loadSavedOutfit) {
+            next = { ...next, undertone: prefs.undertone };
+          } else {
+            next = remixOutfitForContext(next, { undertone: prefs.undertone }, 'all');
+          }
+        }
+        return next;
       });
     });
     return () => {

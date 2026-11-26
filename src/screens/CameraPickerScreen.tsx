@@ -25,6 +25,7 @@ import { RouteProp, useNavigation, useRoute, useIsFocused } from '@react-navigat
 
 import { CameraReticle } from '../components/CameraReticle';
 import { LivePreviewCard } from '../components/LivePreviewCard';
+import { SettingsPrivacyModal } from '../components/SettingsPrivacyModal';
 import { LightingMode } from '../services/ColorEngine';
 import {
   FashionColor,
@@ -141,6 +142,7 @@ export const CameraPickerScreen: React.FC = () => {
   // Selected shade when fine-tuning in frozen mode
   const [selectedColor, setSelectedColor] = useState<FashionColor>(FASHION_COLORS[0]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [settingsVisible, setSettingsVisible] = useState<boolean>(false);
 
   // Sync compareContext khi điều hướng truyền vào (VD: Hút lại từ MatchChecker hoặc chuyển từ ImagePicker)
   useEffect(() => {
@@ -495,7 +497,7 @@ export const CameraPickerScreen: React.FC = () => {
             <Ionicons name="chevron-down" size={12} color="#6B7280" />
           </TouchableOpacity>
 
-          {/* Frozen Indicator / Status Pill */}
+          {/* Frozen Indicator / Settings & Privacy Gear Button */}
           {isFrozen ? (
             <TouchableOpacity
               style={styles.retakeTopBtn}
@@ -506,7 +508,16 @@ export const CameraPickerScreen: React.FC = () => {
               <Text style={styles.retakeTopText}>Chụp lại</Text>
             </TouchableOpacity>
           ) : (
-            <View style={styles.headerRightPlaceholder} />
+            <View style={styles.headerRightGroup}>
+              <TouchableOpacity
+                style={styles.headerPillBtn}
+                onPress={() => setSettingsVisible(true)}
+                activeOpacity={0.8}
+                accessibilityLabel="Cài đặt và Chính sách bảo mật"
+              >
+                <Ionicons name="settings-outline" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
           )}
         </View>
 
@@ -767,6 +778,12 @@ export const CameraPickerScreen: React.FC = () => {
           <Text style={styles.toastText}>{toastMessage}</Text>
         </View>
       )}
+
+      {/* Modal Cài đặt mặc định & Chính sách bảo mật (Google Play) */}
+      <SettingsPrivacyModal
+        visible={settingsVisible}
+        onClose={() => setSettingsVisible(false)}
+      />
     </View>
   );
 };
@@ -864,6 +881,13 @@ const styles = StyleSheet.create({
   headerRightPlaceholder: {
     width: 92,
     height: 42,
+  },
+  headerRightGroup: {
+    width: 92,
+    height: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
   },
   headerPillBtnPlaceholder: {
     width: 42,

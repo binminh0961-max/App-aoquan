@@ -1,17 +1,26 @@
 // src/services/monetizationService.ts
 /**
- * Lớp trừu tượng Monetization tách biệt hoàn toàn UI với SDK quảng cáo.
- * - Nhịp 5A: Lưu trạng thái quyền lợi Tủ đồ cục bộ (`monetization_state_v1.json`)
- *   bằng pattern 3 tầng (`FileSystem` -> `ExponentFileSystem` -> `localStorage` + memory)
- *   và mô phỏng Rewarded Ad qua Promise + Modal để kiểm thử đủ 2 nhánh (nhận thưởng / hủy sớm).
- * - Nhịp 5B: Chỉ cần bật `IS_REAL_ADMOB_ENABLED = true` và thay phần ruột gọi SDK
- *   `react-native-google-mobile-ads` bên trong file này (UI 4 màn hình giữ nguyên 100%).
+ * Lớp trừu tượng Monetization tích hợp SDK thật `react-native-google-mobile-ads` (Nhịp 5B).
+ *
+ * AN TOÀN ADMOB TUYỆT ĐỐI:
+ * - Khi `__DEV__ === true` HOẶC khi ID production bên dưới để trống `''`,
+ *   tất cả Banner / Rewarded / Interstitial BẮT BUỘC dùng Google Official `TestIds`.
+ * - Mọi thao tác nạp/hiển thị quảng cáo đều bọc `try/catch` + timeout an toàn:
+ *   không bao giờ crash hay treo UI khi mất mạng, chưa tải kịp hoặc chạy trên môi trường Web.
  */
 
+import { Platform } from 'react-native';
 import { requireOptionalNativeModule } from 'expo';
+import mobileAds, {
+  AdEventType,
+  InterstitialAd,
+  RewardedAd,
+  RewardedAdEventType,
+  TestIds,
+} from 'react-native-google-mobile-ads';
 
 // =============================================================
-// 1. CẤU HÌNH HẰNG SỐ MONETIZATION (DỄ ĐIỀU CHỈNH TẠI 1 CHỖ)
+// 1. CẤU HÌNH HẰNG SỐ & AD UNIT IDS (ĐIỀN ID THẬT TRƯỚC KHI BUILD .AAB)
 // =============================================================
 
 /** Số ô Tủ đồ miễn phí mặc định cho người dùng mới */
@@ -26,10 +35,25 @@ export const NEW_USER_GRACE_MS = 3 * 60 * 1000;
 /** Giãn cách tối thiểu 5 phút giữa 2 lần quảng cáo toàn màn hình */
 export const INTERSTITIAL_COOLDOWN_MS = 5 * 60 * 1000;
 
-/** Công tắc bật SDK AdMob thật (đặt true ở Nhịp 5B sau khi cài react-native-google-mobile-ads) */
-export const IS_REAL_ADMOB_ENABLED = false;
+/** Công tắc bật SDK AdMob thật (đã bật true ở Nhịp 5B) */
+export const IS_REAL_ADMOB_ENABLED = true;
+
+/**
+ * [TRƯỚC KHI BUILD PRODUCTION .AAB LÊN GOOGLE PLAY]:
+ * 1. Thay `androidAppId` trong `app.json` bằng App ID thật của bạn.
+ * 2. Điền 3 Ad Unit ID thật bên dưới.
+ * - Khi `__DEV__ === true` hoặc khi chuỗi còn trống `''`, hệ thống BẮT BUỘC dùng `TestIds.*`.
+ */
+export const ADMOB_PROD_UNIT_IDS = {
+  banner: 'ca-app-pub-9785592508637778/1700222642',       // Lookbook_Banner
+  rewarded: 'ca-app-pub-9785592508637778/4901101057',     // Unlock_Wardrobe_Slots
+  interstitial: 'ca-app-pub-9785592508637778/4709529360', // Compare_Exit_Interstitial
+} as const;
+
+const AD_LOAD_TIMEOUT_MS = 12000;
 
 export type RewardedAdPlacement = 'unlock_wardrobe_slots';
+export type InterstitialPlacement = 'exit_compare' | 'lookbook_transition';
 
 export interface MonetizationState {
   maxWardrobeSlots: number;
@@ -40,6 +64,8 @@ export interface MonetizationState {
 
 export interface RewardedAdResult {
   rewarded: boolean;
+  reason?: 'earned' | 'closed_early' | 'load_failed' | 'timeout' | 'unavailable';
+  errorMessage?: string;
 }
 
 export interface MockRewardedAdSession {
@@ -77,9 +103,49 @@ const MONETIZATION_WEB_KEY = 'app_aoquan_monetization_state_v1';
 
 let memoryState: MonetizationState | null = null;
 let registeredMockPresenter: MockRewardedAdPresenter | null = null;
+let adsInitialized = false;
+let initPromise: Promise<boolean> | null = null;
+
+// Bộ nhớ đệm Ad đã tải sẵn để hiển thị mượt tức thì
+let preloadedInterstitial: InterstitialAd | null = null;
+let isInterstitialLoaded = false;
+let isInterstitialLoading = false;
+
+let preloadedRewarded: RewardedAd | null = null;
+let isRewardedPreloaded = false;
+let isRewardedPreloading = false;
 
 // =============================================================
-// 2. STORAGE 3 TẦNG (`requireOptionalNativeModule`)
+// 2. GIẢI MÃ AD UNIT ID AN TOÀN (LUÔN DÙNG TestIds TRONG __DEV__)
+// =============================================================
+
+export function isNativeAdsSupported(): boolean {
+  return IS_REAL_ADMOB_ENABLED && (Platform.OS === 'android' || Platform.OS === 'ios');
+}
+
+export function getBannerAdUnitId(): string {
+  if (__DEV__ || !ADMOB_PROD_UNIT_IDS.banner.trim()) {
+    return TestIds.ADAPTIVE_BANNER;
+  }
+  return ADMOB_PROD_UNIT_IDS.banner.trim();
+}
+
+export function getRewardedAdUnitId(): string {
+  if (__DEV__ || !ADMOB_PROD_UNIT_IDS.rewarded.trim()) {
+    return TestIds.REWARDED;
+  }
+  return ADMOB_PROD_UNIT_IDS.rewarded.trim();
+}
+
+export function getInterstitialAdUnitId(): string {
+  if (__DEV__ || !ADMOB_PROD_UNIT_IDS.interstitial.trim()) {
+    return TestIds.INTERSTITIAL;
+  }
+  return ADMOB_PROD_UNIT_IDS.interstitial.trim();
+}
+
+// =============================================================
+// 3. STORAGE 3 TẦNG (`requireOptionalNativeModule`)
 // =============================================================
 
 function normalizeDirUri(dir: string): string {
@@ -170,7 +236,6 @@ async function persistMonetizationState(state: MonetizationState): Promise<void>
   memoryState = { ...state };
   const serialized = JSON.stringify(memoryState);
 
-  // Tầng 1: Modern Expo SDK 58 NativeModule ('FileSystem')
   try {
     const modernFs = getModernNativeFS();
     if (modernFs?.documentDirectory && modernFs.FileSystemFile) {
@@ -183,7 +248,6 @@ async function persistMonetizationState(state: MonetizationState): Promise<void>
     // Fallback xuống legacy
   }
 
-  // Tầng 2: Legacy NativeModule ('ExponentFileSystem')
   try {
     const legacyFs = getLegacyNativeFS();
     if (legacyFs?.documentDirectory && legacyFs.writeAsStringAsync) {
@@ -195,7 +259,6 @@ async function persistMonetizationState(state: MonetizationState): Promise<void>
     // Fallback xuống Web localStorage
   }
 
-  // Tầng 3: Web localStorage
   try {
     const storage = getWebLocalStorage();
     if (storage) {
@@ -207,7 +270,7 @@ async function persistMonetizationState(state: MonetizationState): Promise<void>
 }
 
 // =============================================================
-// 3. QUẢN LÝ QUYỀN LỢI TỦ ĐỒ & TẦN SUẤT QUẢNG CÁO
+// 4. QUẢN LÝ QUYỀN LỢI TỦ ĐỒ & TẦN SUẤT QUẢNG CÁO
 // =============================================================
 
 export function getCachedMonetizationState(): MonetizationState {
@@ -217,12 +280,7 @@ export function getCachedMonetizationState(): MonetizationState {
   return { ...memoryState };
 }
 
-/**
- * Nạp trạng thái Monetization từ `monetization_state_v1.json`.
- * Lần đầu mở app sẽ tự khởi tạo & lưu `firstLaunchAt` để bảo vệ 3 phút đầu không quảng cáo.
- */
 export async function loadMonetizationState(): Promise<MonetizationState> {
-  // Tầng 1: Modern NativeModule ('FileSystem')
   try {
     const modernFs = getModernNativeFS();
     if (modernFs?.documentDirectory && modernFs.FileSystemFile) {
@@ -244,7 +302,6 @@ export async function loadMonetizationState(): Promise<MonetizationState> {
     // Fallback xuống legacy
   }
 
-  // Tầng 2: Legacy NativeModule ('ExponentFileSystem')
   try {
     const legacyFs = getLegacyNativeFS();
     if (legacyFs?.documentDirectory && legacyFs.readAsStringAsync) {
@@ -260,7 +317,6 @@ export async function loadMonetizationState(): Promise<MonetizationState> {
     // File chưa tồn tại hoặc không hỗ trợ -> thử tầng 3
   }
 
-  // Tầng 3: Web localStorage
   try {
     const storage = getWebLocalStorage();
     if (storage) {
@@ -282,13 +338,11 @@ export async function loadMonetizationState(): Promise<MonetizationState> {
   return { ...initial };
 }
 
-/** Kiểm tra xem người dùng còn ô trống để lưu thêm bộ đồ mới hay không. */
 export async function canSaveMoreOutfits(currentCount: number): Promise<boolean> {
   const state = await loadMonetizationState();
   return currentCount < state.maxWardrobeSlots;
 }
 
-/** Cộng thêm ô Tủ đồ vĩnh viễn sau khi người dùng hoàn tất xem quảng cáo có thưởng. */
 export async function grantWardrobeBonusSlots(
   bonus: number = REWARDED_BONUS_SLOTS
 ): Promise<MonetizationState> {
@@ -303,11 +357,6 @@ export async function grantWardrobeBonusSlots(
   return next;
 }
 
-/**
- * Kiểm tra điều kiện được phép hiển thị quảng cáo toàn màn hình (Interstitial):
- * - Tắt hoàn toàn trong `NEW_USER_GRACE_MS` (3 phút đầu mới cài app).
- * - Giãn cách tối thiểu `INTERSTITIAL_COOLDOWN_MS` (5 phút giữa 2 lần hiện).
- */
 export async function canShowInterstitial(): Promise<boolean> {
   const state = await loadMonetizationState();
   const now = Date.now();
@@ -326,7 +375,6 @@ export async function canShowInterstitial(): Promise<boolean> {
   return true;
 }
 
-/** Ghi dấu thời điểm vừa hiển thị Interstitial gần nhất. */
 export async function markInterstitialShown(): Promise<MonetizationState> {
   const current = await loadMonetizationState();
   const next: MonetizationState = {
@@ -338,7 +386,163 @@ export async function markInterstitialShown(): Promise<MonetizationState> {
 }
 
 // =============================================================
-// 4. REWARDED AD ABSTRACTION (SẴN SÀNG THAY SDK THẬT Ở NHỊP 5B)
+// 5. KHỞI TẠO & TẢI TRƯỚC GOOGLE MOBILE ADS SDK (AN TOÀN TUYỆT ĐỐI)
+// =============================================================
+
+/**
+ * Khởi tạo SDK Google Mobile Ads một lần duy nhất lúc mở app.
+ * Bọc try/catch toàn diện để không bao giờ gây crash khi offline hoặc chưa link native.
+ */
+export function initializeMobileAds(): Promise<boolean> {
+  if (adsInitialized) {
+    return Promise.resolve(true);
+  }
+  if (initPromise) {
+    return initPromise;
+  }
+
+  initPromise = (async () => {
+    try {
+      await loadMonetizationState();
+
+      if (!isNativeAdsSupported()) {
+        return false;
+      }
+
+      await mobileAds().initialize();
+      adsInitialized = true;
+
+      // Nạp sẵn ngầm Rewarded & Interstitial để giảm thời gian chờ của người dùng
+      preloadRewardedAd();
+      preloadInterstitialAd();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      initPromise = null;
+    }
+  })();
+
+  return initPromise;
+}
+
+/** Tải trước 1 RewardedAd trong nền (im lặng bỏ qua nếu mất mạng). */
+export function preloadRewardedAd(): void {
+  if (!isNativeAdsSupported() || isRewardedPreloaded || isRewardedPreloading) {
+    return;
+  }
+
+  try {
+    isRewardedPreloading = true;
+    const ad = RewardedAd.createForAdRequest(getRewardedAdUnitId(), {
+      requestNonPersonalizedAdsOnly: true,
+    });
+
+    const unsubLoaded = ad.addAdEventListener(RewardedAdEventType.LOADED, () => {
+      preloadedRewarded = ad;
+      isRewardedPreloaded = true;
+      isRewardedPreloading = false;
+      unsubLoaded();
+      unsubError();
+    });
+
+    const unsubError = ad.addAdEventListener(AdEventType.ERROR, () => {
+      preloadedRewarded = null;
+      isRewardedPreloaded = false;
+      isRewardedPreloading = false;
+      unsubLoaded();
+      unsubError();
+    });
+
+    ad.load();
+  } catch {
+    preloadedRewarded = null;
+    isRewardedPreloaded = false;
+    isRewardedPreloading = false;
+  }
+}
+
+/** Tải trước 1 InterstitialAd trong nền (im lặng bỏ qua nếu mất mạng). */
+export function preloadInterstitialAd(): void {
+  if (!isNativeAdsSupported() || isInterstitialLoaded || isInterstitialLoading) {
+    return;
+  }
+
+  try {
+    isInterstitialLoading = true;
+    const ad = InterstitialAd.createForAdRequest(getInterstitialAdUnitId(), {
+      requestNonPersonalizedAdsOnly: true,
+    });
+
+    const unsubLoaded = ad.addAdEventListener(AdEventType.LOADED, () => {
+      preloadedInterstitial = ad;
+      isInterstitialLoaded = true;
+      isInterstitialLoading = false;
+      unsubLoaded();
+      unsubError();
+    });
+
+    const unsubError = ad.addAdEventListener(AdEventType.ERROR, () => {
+      preloadedInterstitial = null;
+      isInterstitialLoaded = false;
+      isInterstitialLoading = false;
+      unsubLoaded();
+      unsubError();
+    });
+
+    ad.load();
+  } catch {
+    preloadedInterstitial = null;
+    isInterstitialLoaded = false;
+    isInterstitialLoading = false;
+  }
+}
+
+/**
+ * Hiển thị quảng cáo toàn màn hình (Interstitial) chỉ khi:
+ * 1. Đã qua 3 phút đầu mới cài app (`NEW_USER_GRACE_MS`)
+ * 2. Đã qua ít nhất 5 phút từ lần hiện trước (`INTERSTITIAL_COOLDOWN_MS`)
+ * 3. Quảng cáo đã được tải sẵn trong bộ nhớ (không làm người dùng phải chờ màn hình trắng).
+ */
+export async function maybeShowInterstitial(
+  _placement: InterstitialPlacement
+): Promise<boolean> {
+  if (!isNativeAdsSupported()) {
+    return false;
+  }
+
+  try {
+    const eligible = await canShowInterstitial();
+    if (!eligible) {
+      return false;
+    }
+
+    if (!isInterstitialLoaded || !preloadedInterstitial) {
+      preloadInterstitialAd();
+      return false;
+    }
+
+    const ad = preloadedInterstitial;
+    preloadedInterstitial = null;
+    isInterstitialLoaded = false;
+
+    const unsubClosed = ad.addAdEventListener(AdEventType.CLOSED, () => {
+      unsubClosed();
+      preloadInterstitialAd();
+    });
+
+    await markInterstitialShown();
+    await ad.show();
+    return true;
+  } catch {
+    preloadedInterstitial = null;
+    isInterstitialLoaded = false;
+    return false;
+  }
+}
+
+// =============================================================
+// 6. REWARDED AD THẬT (MỞ KHÓA +3 Ô TỦ ĐỒ — CHỐNG CRASH & TIMEOUT)
 // =============================================================
 
 export function registerMockRewardedAdPresenter(
@@ -347,29 +551,172 @@ export function registerMockRewardedAdPresenter(
   registeredMockPresenter = presenter;
 }
 
+function showRealRewardedAdInstance(
+  ad: RewardedAd,
+  alreadyLoaded: boolean
+): Promise<RewardedAdResult> {
+  return new Promise<RewardedAdResult>(resolve => {
+    let settled = false;
+    let earnedReward = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribers: (() => void)[] = [];
+
+    const cleanup = () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      while (unsubscribers.length > 0) {
+        const unsub = unsubscribers.pop();
+        try {
+          unsub?.();
+        } catch {
+          // Bỏ qua an toàn
+        }
+      }
+    };
+
+    const finish = (result: RewardedAdResult) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // Chuẩn bị sẵn quảng cáo tiếp theo trong nền
+      preloadRewardedAd();
+      resolve(result);
+    };
+
+    try {
+      const unsubEarned = ad.addAdEventListener(
+        RewardedAdEventType.EARNED_REWARD,
+        () => {
+          earnedReward = true;
+        }
+      );
+      unsubscribers.push(unsubEarned);
+
+      const unsubClosed = ad.addAdEventListener(AdEventType.CLOSED, () => {
+        finish({
+          rewarded: earnedReward,
+          reason: earnedReward ? 'earned' : 'closed_early',
+        });
+      });
+      unsubscribers.push(unsubClosed);
+
+      const unsubError = ad.addAdEventListener(AdEventType.ERROR, () => {
+        finish({
+          rewarded: false,
+          reason: 'load_failed',
+          errorMessage:
+            'Không tải được quảng cáo lúc này. Vui lòng kiểm tra kết nối mạng và thử lại sau.',
+        });
+      });
+      unsubscribers.push(unsubError);
+
+      if (alreadyLoaded) {
+        ad.show().catch(() => {
+          finish({
+            rewarded: false,
+            reason: 'load_failed',
+            errorMessage:
+              'Không thể phát quảng cáo lúc này. Vui lòng thử lại sau ít giây.',
+          });
+        });
+        return;
+      }
+
+      const unsubLoaded = ad.addAdEventListener(RewardedAdEventType.LOADED, () => {
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        ad.show().catch(() => {
+          finish({
+            rewarded: false,
+            reason: 'load_failed',
+            errorMessage:
+              'Không thể phát quảng cáo lúc này. Vui lòng thử lại sau ít giây.',
+          });
+        });
+      });
+      unsubscribers.push(unsubLoaded);
+
+      timeoutId = setTimeout(() => {
+        finish({
+          rewarded: false,
+          reason: 'timeout',
+          errorMessage:
+            'Quảng cáo tải quá lâu do mạng chậm. Vui lòng kiểm tra kết nối và thử lại.',
+        });
+      }, AD_LOAD_TIMEOUT_MS);
+
+      ad.load();
+    } catch {
+      finish({
+        rewarded: false,
+        reason: 'unavailable',
+        errorMessage:
+          'Quảng cáo tạm thời chưa sẵn sàng trên thiết bị này. Vui lòng thử lại sau.',
+      });
+    }
+  });
+}
+
 /**
- * Yêu cầu phát quảng cáo có thưởng cho một vị trí cụ thể (`unlock_wardrobe_slots`).
- * - Nhịp 5A (`IS_REAL_ADMOB_ENABLED === false`): ủy quyền cho Modal mô phỏng (có nút Hủy sớm & đếm ngược 2s)
- *   thông qua `mockPresenter` để test đủ cả 2 nhánh `rewarded: true` và `rewarded: false`.
- * - Nhịp 5B (`IS_REAL_ADMOB_ENABLED === true`): thay nhánh `if (IS_REAL_ADMOB_ENABLED)` bằng SDK AdMob thật.
+ * Yêu cầu phát quảng cáo có thưởng (`unlock_wardrobe_slots`).
+ * - Trên Android/iOS (`IS_REAL_ADMOB_ENABLED === true`): gọi SDK thật `react-native-google-mobile-ads`.
+ * - Khi mất mạng / lỗi tải / quá thời gian: trả về `{ rewarded: false, reason, errorMessage }` an toàn.
  */
-export function requestRewardedAd(
+export async function requestRewardedAd(
   placement: RewardedAdPlacement,
   mockPresenter?: MockRewardedAdPresenter
 ): Promise<RewardedAdResult> {
   if (IS_REAL_ADMOB_ENABLED) {
-    // [NHỊP 5B]: Tích hợp RewardedAd từ react-native-google-mobile-ads tại đây
-    return Promise.resolve({ rewarded: false });
+    if (!isNativeAdsSupported()) {
+      return {
+        rewarded: false,
+        reason: 'unavailable',
+        errorMessage:
+          'Quảng cáo có thưởng chỉ hoạt động trên bản dựng Android / iOS.',
+      };
+    }
+
+    try {
+      if (!adsInitialized) {
+        await initializeMobileAds();
+      }
+
+      if (isRewardedPreloaded && preloadedRewarded) {
+        const readyAd = preloadedRewarded;
+        preloadedRewarded = null;
+        isRewardedPreloaded = false;
+        return await showRealRewardedAdInstance(readyAd, true);
+      }
+
+      const freshAd = RewardedAd.createForAdRequest(getRewardedAdUnitId(), {
+        requestNonPersonalizedAdsOnly: true,
+      });
+      return await showRealRewardedAdInstance(freshAd, false);
+    } catch {
+      return {
+        rewarded: false,
+        reason: 'load_failed',
+        errorMessage:
+          'Không tải được quảng cáo lúc này. Vui lòng kiểm tra kết nối mạng và thử lại.',
+      };
+    }
   }
 
+  // Fallback mô phỏng (chỉ dùng nếu chủ động tắt IS_REAL_ADMOB_ENABLED = false)
   const presenter = mockPresenter ?? registeredMockPresenter;
-
   return new Promise<RewardedAdResult>(resolve => {
     let settled = false;
     const finish = (rewarded: boolean) => {
       if (settled) return;
       settled = true;
-      resolve({ rewarded });
+      resolve({
+        rewarded,
+        reason: rewarded ? 'earned' : 'closed_early',
+      });
     };
 
     if (presenter) {
@@ -382,7 +729,6 @@ export function requestRewardedAd(
       return;
     }
 
-    // Fallback nếu gọi trực tiếp không có presenter UI
     setTimeout(() => finish(true), 2000);
   });
 }
